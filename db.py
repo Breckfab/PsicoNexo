@@ -1,15 +1,11 @@
 import os
-import psycopg2
-from psycopg2.extras import RealDictCursor
+import psycopg
 from dotenv import load_dotenv
 
 load_dotenv()
 
 def get_connection():
-    return psycopg2.connect(
-        os.environ["DATABASE_URL"],
-        cursor_factory=RealDictCursor
-    )
+    return psycopg.connect(os.environ["DATABASE_URL"])
 
 def init_db():
     conn = get_connection()

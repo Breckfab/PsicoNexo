@@ -1,77 +1,41 @@
-import streamlit as st
-from db import init_db
-from auth import login_user, register_user, logout, get_carreras
+import os
+import psycopg
+from dotenv import load_dotenv
 
-st.set_page_config(
-    page_title="PsicoNexo",
-    page_icon="🧠",
-    layout="centered"
-)
+load_dotenv()
 
-init_db()
+def get_connection():
+    return psycopg.connect(os.environ["DATABASE_URL"])
 
-if "usuario" not in st.session_state:
-    st.session_state.usuario = None
-if "pagina" not in st.session_state:
-    st.session_state.pagina = "login"
+def init_db():
+    conn = get_connection()
+    cur = conn.cursor()
 
-def mostrar_login():
-    st.title("🧠 PsicoNexo")
-    st.subheader("Iniciá sesión")
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS carreras (
+            id SERIAL PRIMARY KEY,
+            nombre TEXT NOT NULL,
+            universidad TEXT NOT NULL
+        );
+    """)
 
-    with st.form("form_login"):
-        email = st.text_input("Email")
-        password = st.text_input("Contraseña", type="password")
-        submit = st.form_submit_button("Ingresar")
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS usuarios (
+            id SERIAL PRIMARY KEY,
+            email TEXT UNIQUE NOT NULL,
+            password_hash TEXT NOT NULL,
+            nombre TEXT NOT NULL,
+            carrera_id INTEGER REFERENCES carreras(id),
+            created_at TIMESTAMP DEFAULT NOW()
+        );
+    """)
 
-    if submit:
-        ok, msg, user = login_user(email, password)
-        if ok:
-            st.session_state.usuario = user
-            st.session_state.pagina = "home"
-            st.rerun()
-        else:
-            st.error(msg)
+    cur.execute("""
+        INSERT INTO carreras (nombre, universidad)
+        VALUES ('Licenciatura en Psicología', 'UdeMM')
+        ON CONFLICT DO NOTHING;
+    """)
 
-    st.markdown("---")
-    if st.button("¿No tenés cuenta? Registrate"):
-        st.session_state.pagina = "registro"
-        st.rerun()
-
-def mostrar_registro():
-    st.title("🧠 PsicoNexo")
-    st.subheader("Crear cuenta")
-
-    carreras = get_carreras()
-    opciones = {f"{c['nombre']} — {c['universidad']}": c["id"] for c in carreras}
-
-    with st.form("form_registro"):
-        nombre = st.text_input("Nombre completo")
-        email = st.text_input("Email")
-        password = st.text_input("Contraseña", type="password")
-        password2 = st.text_input("Repetir contraseña", type="password")
-        carrera_label = st.selectbox("Carrera", list(opciones.keys()))
-        submit = st.form_submit_button("Registrarme")
-
-    if submit:
-        if not nombre or not email or not password:
-            st.error("Completá todos los campos.")
-        elif password != password2:
-            st.error("Las contraseñas no coinciden.")
-        else:
-            carrera_id = opciones[carrera_label]
-            ok, msg = register_user(email, password, nombre, carrera_id)
-            if ok:
-                st.success("Cuenta creada. Ya podés iniciar sesión.")
-                st.session_state.pagina = "login"
-                st.rerun()
-            else:
-                st.error(msg)
-
-    st.markdown("---")
-    if st.button("← Volver al login"):
-        st.session_state.pagina = "login"
-        st.rerun()
-
-def mostrar_app():
-    from pages import
+    conn.commit()
+    cur.close()
+    conn.close()

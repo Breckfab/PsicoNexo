@@ -31,6 +31,27 @@ def init_db():
     """)
 
     cur.execute("""
+        CREATE TABLE IF NOT EXISTS materias (
+            id SERIAL PRIMARY KEY,
+            carrera_id INTEGER REFERENCES carreras(id),
+            codigo TEXT,
+            nombre TEXT NOT NULL,
+            anio INTEGER NOT NULL,
+            cuatrimestre TEXT NOT NULL,
+            final_obligatorio BOOLEAN DEFAULT FALSE,
+            es_electiva BOOLEAN DEFAULT FALSE
+        );
+    """)
+
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS correlatividades (
+            id SERIAL PRIMARY KEY,
+            materia_id INTEGER REFERENCES materias(id),
+            requiere_materia_id INTEGER REFERENCES materias(id)
+        );
+    """)
+
+    cur.execute("""
         INSERT INTO carreras (nombre, universidad)
         VALUES ('Licenciatura en Psicología', 'UdeMM')
         ON CONFLICT DO NOTHING;
@@ -39,3 +60,4 @@ def init_db():
     conn.commit()
     cur.close()
     conn.close()
+

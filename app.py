@@ -65,8 +65,6 @@ def mostrar_registro():
 def mostrar_app():
     usuario = st.session_state.usuario
 
-    st.write(f"DEBUG carrera_id: {usuario['carrera_id']}")
-
     with st.sidebar:
         st.markdown(f"### 👤 {usuario['nombre']}")
         st.markdown("---")
@@ -81,6 +79,8 @@ def mostrar_app():
         if st.button("Cerrar sesión"):
             logout()
             st.rerun()
+
+    st.write(f"DEBUG carrera_id: {usuario['carrera_id']}")
 
     if st.session_state.pagina == "materias":
         from pages import materias

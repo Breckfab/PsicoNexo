@@ -6,7 +6,6 @@ st.set_page_config(page_title="PsicoNexo", page_icon="🧠", layout="centered")
 
 init_db()
 
-
 if "usuario" not in st.session_state:
     st.session_state.usuario = None
 if "pagina" not in st.session_state:
@@ -64,8 +63,29 @@ def mostrar_registro():
         st.rerun()
 
 def mostrar_app():
-    from pages import home
-    home.mostrar(st.session_state.usuario)
+    usuario = st.session_state.usuario
+
+    with st.sidebar:
+        st.markdown(f"### 👤 {usuario['nombre']}")
+        st.markdown("---")
+        st.markdown("📋 **Menú**")
+        if st.button("🏠 Inicio"):
+            st.session_state.pagina = "home"
+            st.rerun()
+        if st.button("📚 Plan de Estudios"):
+            st.session_state.pagina = "materias"
+            st.rerun()
+        st.markdown("---")
+        if st.button("Cerrar sesión"):
+            logout()
+            st.rerun()
+
+    if st.session_state.pagina == "materias":
+        from pages import materias
+        materias.mostrar(usuario)
+    else:
+        from pages import home
+        home.mostrar(usuario)
 
 if st.session_state.usuario is None:
     if st.session_state.pagina == "registro":

@@ -52,6 +52,16 @@ def init_db():
     """)
 
     cur.execute("""
+        CREATE TABLE IF NOT EXISTS alumno_materias (
+            id SERIAL PRIMARY KEY,
+            usuario_id INTEGER REFERENCES usuarios(id),
+            materia_id INTEGER REFERENCES materias(id),
+            estado TEXT DEFAULT 'pendiente',
+            UNIQUE(usuario_id, materia_id)
+        );
+    """)
+
+    cur.execute("""
         INSERT INTO carreras (nombre, universidad)
         VALUES ('Licenciatura en Psicología', 'UdeMM')
         ON CONFLICT DO NOTHING;
@@ -60,4 +70,3 @@ def init_db():
     conn.commit()
     cur.close()
     conn.close()
-

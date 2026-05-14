@@ -5,6 +5,8 @@ from auth import login_user, register_user, logout, get_carreras
 st.set_page_config(page_title="PsicoNexo", page_icon="🧠", layout="centered")
 
 init_db()
+from seed_materias import seed
+seed()
 
 if "usuario" not in st.session_state:
     st.session_state.usuario = None

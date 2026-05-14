@@ -15,7 +15,8 @@ def init_db():
         CREATE TABLE IF NOT EXISTS carreras (
             id SERIAL PRIMARY KEY,
             nombre TEXT NOT NULL,
-            universidad TEXT NOT NULL
+            universidad TEXT NOT NULL,
+            UNIQUE(nombre, universidad)
         );
     """)
 
@@ -64,7 +65,7 @@ def init_db():
     cur.execute("""
         INSERT INTO carreras (nombre, universidad)
         VALUES ('Licenciatura en Psicología', 'UdeMM')
-        ON CONFLICT DO NOTHING;
+        ON CONFLICT (nombre, universidad) DO NOTHING;
     """)
 
     conn.commit()

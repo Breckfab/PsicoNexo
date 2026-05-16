@@ -1,5 +1,6 @@
 import os
 import psycopg
+import bcrypt
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -27,6 +28,7 @@ def init_db():
             password_hash TEXT NOT NULL,
             nombre TEXT NOT NULL,
             carrera_id INTEGER REFERENCES carreras(id),
+            es_admin BOOLEAN DEFAULT FALSE,
             created_at TIMESTAMP DEFAULT NOW()
         );
     """)
@@ -63,11 +65,36 @@ def init_db():
     """)
 
     cur.execute("""
+        CREATE TABLE IF NOT EXISTS codigos_invitacion (
+            id SERIAL PRIMARY KEY,
+            codigo TEXT UNIQUE NOT NULL,
+            usado BOOLEAN DEFAULT FALSE,
+            creado_por INTEGER REFERENCES usuarios(id),
+            usado_por INTEGER REFERENCES usuarios(id),
+            created_at TIMESTAMP DEFAULT NOW()
+        );
+    """)
+
+    cur.execute("""
         INSERT INTO carreras (nombre, universidad)
         VALUES ('Licenciatura en Psicología', 'UdeMM')
         ON CONFLICT (nombre, universidad) DO NOTHING;
     """)
 
     conn.commit()
+    cur.close()
+    conn.close()
+
+def crear_admin_si_no_existe():
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("SELECT id FROM usuarios WHERE email = 'fabianbelledi@gmail.com';")
+    if not cur.fetchone():
+        password_hash = bcrypt.hashpw("Seamist123**".encode(), bcrypt.gensalt()).decode()
+        cur.execute("""
+            INSERT INTO usuarios (email, password_hash, nombre, carrera_id, es_admin)
+            VALUES ('fabianbelledi@gmail.com', %s, 'Admin', 1, TRUE);
+        """, (password_hash,))
+        conn.commit()
     cur.close()
     conn.close()

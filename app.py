@@ -12,7 +12,7 @@ if "pagina" not in st.session_state:
     st.session_state.pagina = "login"
 
 def mostrar_login():
-    col1, col2, col3 = st.columns([2, 1, 2])
+    col1, col2, col3 = st.columns([1, 1, 1])
     with col2:
         st.image("PsicoNexo_png.png", use_container_width=True)
     st.subheader("Iniciá sesión")
@@ -34,7 +34,7 @@ def mostrar_login():
         st.rerun()
 
 def mostrar_registro():
-    col1, col2, col3 = st.columns([2, 1, 2])
+    col1, col2, col3 = st.columns([1, 1, 1])
     with col2:
         st.image("PsicoNexo_png.png", use_container_width=True)
     st.subheader("Crear cuenta")

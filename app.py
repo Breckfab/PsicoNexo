@@ -2,7 +2,7 @@ import streamlit as st
 from db import init_db, crear_admin_si_no_existe
 from auth import login_user, register_user, logout, get_carreras, generar_codigo, get_codigos
 
-st.set_page_config(page_title="PsicoNexo", page_icon="Psicologia_favicon_png.png", layout="centered")
+st.set_page_config(page_title="PsicoNexo", page_icon="Psicologia_favicon_png.png", layout="wide")
 
 if "usuario" not in st.session_state or st.session_state.usuario is None:
     st.markdown("""
@@ -94,56 +94,107 @@ def mostrar_admin():
     else:
         st.info("No hay códigos generados todavía.")
 
+def mostrar_navbar(usuario):
+    st.markdown("""
+        <style>
+        .navbar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            background-color: #1E1E2E;
+            padding: 8px 20px;
+            border-radius: 10px;
+            margin-bottom: 20px;
+        }
+        .navbar-left {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+        .navbar-right {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            color: #ccc;
+            font-size: 13px;
+        }
+        .reloj {
+            font-family: monospace;
+            font-size: 15px;
+            color: #A78BFA;
+            font-weight: bold;
+        }
+        </style>
+    """, unsafe_allow_html=True)
+
+    # Reloj en la navbar
+    st.components.v1.html("""
+        <div style="background-color:#1E1E2E; padding:8px 20px; border-radius:10px; margin-bottom:10px;
+                    display:flex; align-items:center; justify-content:space-between;">
+            <div style="display:flex; align-items:center; gap:10px;">
+                <span style="color:white; font-size:18px; font-weight:bold;">🧠 PsicoNexo</span>
+            </div>
+            <div style="text-align:center;">
+                <div id="reloj" style="font-family:monospace; font-size:20px; font-weight:bold; color:#A78BFA;"></div>
+                <div id="fecha" style="font-size:11px; color:#aaa;"></div>
+            </div>
+            <div style="color:#ccc; font-size:13px;">
+                👤 """ + usuario['nombre'] + """
+            </div>
+        </div>
+        <script>
+        const dias = ['Domingo','Lunes','Martes','Miércoles','Jueves','Viernes','Sábado'];
+        const meses = ['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'];
+        function actualizar() {
+            const now = new Date();
+            const h = String(now.getHours()).padStart(2,'0');
+            const m = String(now.getMinutes()).padStart(2,'0');
+            const s = String(now.getSeconds()).padStart(2,'0');
+            document.getElementById('reloj').textContent = h + ':' + m + ':' + s;
+            const dia = dias[now.getDay()];
+            const fecha = now.getDate() + ' de ' + meses[now.getMonth()] + ' de ' + now.getFullYear();
+            document.getElementById('fecha').textContent = dia + ', ' + fecha;
+        }
+        actualizar();
+        setInterval(actualizar, 1000);
+        </script>
+    """, height=70)
+
+    # Menú horizontal
+    items = ["🏠 Inicio", "📚 Plan de Estudios", "📂 Recursos"]
+    if usuario.get("es_admin"):
+        items.append("🔧 Administración")
+    items.append("🚪 Cerrar sesión")
+
+    cols = st.columns(len(items))
+    paginas = {
+        "🏠 Inicio": "home",
+        "📚 Plan de Estudios": "materias",
+        "📂 Recursos": "recursos",
+        "🔧 Administración": "admin",
+        "🚪 Cerrar sesión": "logout"
+    }
+
+    for i, item in enumerate(items):
+        with cols[i]:
+            if st.button(item, use_container_width=True):
+                if paginas[item] == "logout":
+                    logout()
+                else:
+                    st.session_state.pagina = paginas[item]
+                st.rerun()
+
 def mostrar_app():
     usuario = st.session_state.usuario
 
-    with st.sidebar:
-        st.image("PsicoNexo_png.png", use_container_width=True)
-        st.markdown(f"### 👤 {usuario['nombre']}")
-        st.markdown("---")
+    # Ocultar sidebar completamente
+    st.markdown("""
+        <style>
+        [data-testid="stSidebar"] {display: none;}
+        </style>
+    """, unsafe_allow_html=True)
 
-        # Reloj y fecha
-        st.components.v1.html("""
-            <div style="text-align:center; font-family: monospace;">
-                <div id="reloj" style="font-size:28px; font-weight:bold; color:#7B2FBE;"></div>
-                <div id="fecha" style="font-size:13px; color:#888; margin-top:2px;"></div>
-            </div>
-            <script>
-            const dias = ['Domingo','Lunes','Martes','Miércoles','Jueves','Viernes','Sábado'];
-            const meses = ['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'];
-            function actualizar() {
-                const now = new Date();
-                const h = String(now.getHours()).padStart(2,'0');
-                const m = String(now.getMinutes()).padStart(2,'0');
-                const s = String(now.getSeconds()).padStart(2,'0');
-                document.getElementById('reloj').textContent = h + ':' + m + ':' + s;
-                const dia = dias[now.getDay()];
-                const fecha = now.getDate() + ' de ' + meses[now.getMonth()] + ' de ' + now.getFullYear();
-                document.getElementById('fecha').textContent = dia + ', ' + fecha;
-            }
-            actualizar();
-            setInterval(actualizar, 1000);
-            </script>
-        """, height=65)
-
-        st.markdown("---")
-        if st.button("🏠 Inicio"):
-            st.session_state.pagina = "home"
-            st.rerun()
-        if st.button("📚 Plan de Estudios"):
-            st.session_state.pagina = "materias"
-            st.rerun()
-        if st.button("📂 Recursos"):
-            st.session_state.pagina = "recursos"
-            st.rerun()
-        if usuario.get("es_admin"):
-            if st.button("🔧 Administración"):
-                st.session_state.pagina = "admin"
-                st.rerun()
-        st.markdown("---")
-        if st.button("Cerrar sesión"):
-            logout()
-            st.rerun()
+    mostrar_navbar(usuario)
 
     if st.session_state.pagina == "materias":
         from pages import materias

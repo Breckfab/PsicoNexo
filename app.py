@@ -184,13 +184,13 @@ def mostrar_navbar(usuario):
 
     st.markdown(f"""
         <div style="background-color:#1E1E2E; padding:12px 20px; border-radius:10px; margin-bottom:10px;
-                    display:flex; align-items:center; justify-content:center;">
+                    display:flex; align-items:center; justify-content:center; position:relative;">
             <span style="color:white; font-size:28px; font-weight:bold; text-align:center;">🧠 PsicoNexo</span>
             <span style="color:#ccc; font-size:13px; position:absolute; right:30px;">👤 {usuario['nombre']}</span>
         </div>
     """, unsafe_allow_html=True)
 
-    items = ["🏠 Inicio", "📚 Plan de Estudios", "🗓️ Cursadas", "📂 Recursos"]
+    items = ["🏠 Inicio", "📚 Plan de Estudios", "🗓️ Cursadas", "📝 Notas", "📂 Recursos"]
     if usuario.get("es_admin"):
         items.append("🔧 Administración")
 
@@ -198,6 +198,7 @@ def mostrar_navbar(usuario):
         "🏠 Inicio": "home",
         "📚 Plan de Estudios": "materias",
         "🗓️ Cursadas": "cursadas",
+        "📝 Notas": "evaluaciones",
         "📂 Recursos": "recursos",
         "🔧 Administración": "admin",
     }
@@ -220,6 +221,9 @@ def mostrar_app():
     elif st.session_state.pagina == "cursadas":
         from pages import cursadas
         cursadas.mostrar(usuario)
+    elif st.session_state.pagina == "evaluaciones":
+        from pages import evaluaciones
+        evaluaciones.mostrar(usuario)
     elif st.session_state.pagina == "recursos":
         from pages import recursos
         recursos.mostrar(usuario)

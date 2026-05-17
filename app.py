@@ -2,9 +2,8 @@ import streamlit as st
 from db import init_db, crear_admin_si_no_existe
 from auth import login_user, register_user, logout, get_carreras, generar_codigo, get_codigos
 
-st.set_page_config(page_title="PsicoNexo", page_icon="🧠", layout="centered")
+st.set_page_config(page_title="PsicoNexo", page_icon="Psicologia_favicon_png.png", layout="centered")
 
-# Ocultar sidebar antes del login
 if "usuario" not in st.session_state or st.session_state.usuario is None:
     st.markdown("""
         <style>

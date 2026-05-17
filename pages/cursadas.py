@@ -141,6 +141,13 @@ def get_clases_hoy(usuario_id):
     conn.close()
     return rows
 
+def reset_form_cursada():
+    for key in ["form_materia", "form_anio", "form_cuatri", "form_turno",
+                "form_modalidad", "form_horario", "form_link",
+                "form_dias", "form_prof1", "form_email1", "form_prof2", "form_email2"]:
+        if key in st.session_state:
+            del st.session_state[key]
+
 def mostrar(usuario):
     st.title("🗓️ Cursadas")
 
@@ -238,7 +245,11 @@ def mostrar(usuario):
         nombres_anio_map = {1: "1° Año", 2: "2° Año", 3: "3° Año", 4: "4° Año", 5: "5° Año"}
         opciones = {f"{nombres_anio_map.get(m[2], '')} — {m[1]}": m[0] for m in todas}
 
-        with st.form("form_cursada"):
+        # Key dinámica para resetear el formulario
+        if "form_cursada_key" not in st.session_state:
+            st.session_state.form_cursada_key = 0
+
+        with st.form(f"form_cursada_{st.session_state.form_cursada_key}"):
             materia_label = st.selectbox("Materia", list(opciones.keys()))
             col1, col2 = st.columns(2)
             with col1:
@@ -263,7 +274,8 @@ def mostrar(usuario):
             materia_id = opciones[materia_label]
             dias_str = ", ".join(dias_sel) if dias_sel else ""
             guardar_cursada(usuario["id"], materia_id, anio, cuatrimestre, modalidad, turno, dias_str, horario, link, profesor1, email_profesor1, profesor2, email_profesor2)
-            st.success("Cursada guardada correctamente.")
+            st.session_state.form_cursada_key += 1
+            st.success("✅ Cursada guardada correctamente.")
             st.rerun()
 
     with tab3:
@@ -321,9 +333,12 @@ def mostrar(usuario):
                                         st.session_state[f"editando_tarea_{num}"] = False
                                         st.rerun()
                     else:
-                        with st.form(f"form_nueva_tarea_{num}"):
+                        if f"tarea_key_{num}" not in st.session_state:
+                            st.session_state[f"tarea_key_{num}"] = 0
+                        with st.form(f"form_nueva_tarea_{num}_{st.session_state[f'tarea_key_{num}']}"):
                             desc = st.text_input(f"Descripción de la tarea {num}")
                             fecha = st.date_input("Fecha de vencimiento", value=hoy)
                             if st.form_submit_button("💾 Guardar", use_container_width=True):
                                 guardar_tarea(usuario["id"], materia_tarea_id, num, desc, fecha)
+                                st.session_state[f"tarea_key_{num}"] += 1
                                 st.rerun()

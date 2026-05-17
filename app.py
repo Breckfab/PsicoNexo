@@ -101,6 +101,32 @@ def mostrar_app():
         st.image("PsicoNexo_png.png", use_container_width=True)
         st.markdown(f"### 👤 {usuario['nombre']}")
         st.markdown("---")
+
+        # Reloj y fecha
+        st.components.v1.html("""
+            <div style="text-align:center; font-family: monospace;">
+                <div id="reloj" style="font-size:28px; font-weight:bold; color:#7B2FBE;"></div>
+                <div id="fecha" style="font-size:13px; color:#888; margin-top:2px;"></div>
+            </div>
+            <script>
+            const dias = ['Domingo','Lunes','Martes','Miércoles','Jueves','Viernes','Sábado'];
+            const meses = ['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'];
+            function actualizar() {
+                const now = new Date();
+                const h = String(now.getHours()).padStart(2,'0');
+                const m = String(now.getMinutes()).padStart(2,'0');
+                const s = String(now.getSeconds()).padStart(2,'0');
+                document.getElementById('reloj').textContent = h + ':' + m + ':' + s;
+                const dia = dias[now.getDay()];
+                const fecha = now.getDate() + ' de ' + meses[now.getMonth()] + ' de ' + now.getFullYear();
+                document.getElementById('fecha').textContent = dia + ', ' + fecha;
+            }
+            actualizar();
+            setInterval(actualizar, 1000);
+            </script>
+        """, height=65)
+
+        st.markdown("---")
         if st.button("🏠 Inicio"):
             st.session_state.pagina = "home"
             st.rerun()

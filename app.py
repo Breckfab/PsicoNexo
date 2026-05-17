@@ -95,44 +95,14 @@ def mostrar_admin():
         st.info("No hay códigos generados todavía.")
 
 def mostrar_navbar(usuario):
-    st.markdown("""
-        <style>
-        .navbar {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            background-color: #1E1E2E;
-            padding: 8px 20px;
-            border-radius: 10px;
-            margin-bottom: 20px;
-        }
-        .navbar-left {
-            display: flex;
-            align-items: center;
-            gap: 12px;
-        }
-        .navbar-right {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            color: #ccc;
-            font-size: 13px;
-        }
-        .reloj {
-            font-family: monospace;
-            font-size: 15px;
-            color: #A78BFA;
-            font-weight: bold;
-        }
-        </style>
-    """, unsafe_allow_html=True)
-
-    # Reloj en la navbar
     st.components.v1.html("""
         <div style="background-color:#1E1E2E; padding:8px 20px; border-radius:10px; margin-bottom:10px;
                     display:flex; align-items:center; justify-content:space-between;">
             <div style="display:flex; align-items:center; gap:10px;">
-                <span style="color:white; font-size:18px; font-weight:bold;">🧠 PsicoNexo</span>
+                <div>
+                    <div style="color:#ccc; font-size:11px; letter-spacing:1px;">SISTEMA PARA ESTUDIANTES DE PSICOLOGÍA</div>
+                    <span style="color:white; font-size:18px; font-weight:bold;">🧠 PsicoNexo</span>
+                </div>
             </div>
             <div style="text-align:center;">
                 <div id="reloj" style="font-family:monospace; font-size:20px; font-weight:bold; color:#A78BFA;"></div>
@@ -160,7 +130,6 @@ def mostrar_navbar(usuario):
         </script>
     """, height=70)
 
-    # Menú horizontal
     items = ["🏠 Inicio", "📚 Plan de Estudios", "📂 Recursos"]
     if usuario.get("es_admin"):
         items.append("🔧 Administración")
@@ -187,7 +156,6 @@ def mostrar_navbar(usuario):
 def mostrar_app():
     usuario = st.session_state.usuario
 
-    # Ocultar sidebar completamente
     st.markdown("""
         <style>
         [data-testid="stSidebar"] {display: none;}

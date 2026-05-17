@@ -107,6 +107,9 @@ def mostrar_app():
         if st.button("📚 Plan de Estudios"):
             st.session_state.pagina = "materias"
             st.rerun()
+        if st.button("📂 Recursos"):
+            st.session_state.pagina = "recursos"
+            st.rerun()
         if usuario.get("es_admin"):
             if st.button("🔧 Administración"):
                 st.session_state.pagina = "admin"
@@ -119,6 +122,9 @@ def mostrar_app():
     if st.session_state.pagina == "materias":
         from pages import materias
         materias.mostrar(usuario)
+    elif st.session_state.pagina == "recursos":
+        from pages import recursos
+        recursos.mostrar(usuario)
     elif st.session_state.pagina == "admin":
         mostrar_admin()
     else:

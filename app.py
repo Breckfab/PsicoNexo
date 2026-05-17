@@ -24,62 +24,77 @@ if "cal_mes" not in st.session_state:
     st.session_state.cal_mes = datetime.now().month
 if "cal_anio" not in st.session_state:
     st.session_state.cal_anio = datetime.now().year
+if "tema_oscuro" not in st.session_state:
+    st.session_state.tema_oscuro = True
 
 def mostrar_login():
+    st.markdown("""
+        <style>
+        .login-container {
+            max-width: 400px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        </style>
+    """, unsafe_allow_html=True)
     col1, col2, col3 = st.columns([2, 1, 2])
     with col2:
         st.image("PsicoNexo_png.png", width=150)
-    st.subheader("Iniciá sesión")
-    with st.form("form_login"):
-        email = st.text_input("Email")
-        password = st.text_input("Contraseña", type="password")
-        submit = st.form_submit_button("Ingresar")
-    if submit:
-        ok, msg, user = login_user(email, password)
-        if ok:
-            st.session_state.usuario = user
-            st.session_state.pagina = "home"
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
+        st.subheader("Iniciá sesión")
+        with st.form("form_login"):
+            email = st.text_input("Email")
+            password = st.text_input("Contraseña", type="password")
+            submit = st.form_submit_button("Ingresar", use_container_width=True)
+        if submit:
+            ok, msg, user = login_user(email, password)
+            if ok:
+                st.session_state.usuario = user
+                st.session_state.pagina = "home"
+                st.rerun()
+            else:
+                st.error(msg)
+        st.markdown("---")
+        if st.button("¿No tenés cuenta? Registrate", use_container_width=True):
+            st.session_state.pagina = "registro"
             st.rerun()
-        else:
-            st.error(msg)
-    st.markdown("---")
-    if st.button("¿No tenés cuenta? Registrate"):
-        st.session_state.pagina = "registro"
-        st.rerun()
 
 def mostrar_registro():
     col1, col2, col3 = st.columns([2, 1, 2])
     with col2:
         st.image("PsicoNexo_png.png", width=150)
-    st.subheader("Crear cuenta")
-    carreras = get_carreras()
-    opciones = {f"{c[1]} — {c[2]}": c[0] for c in carreras}
-    with st.form("form_registro"):
-        nombre = st.text_input("Nombre completo")
-        email = st.text_input("Email")
-        password = st.text_input("Contraseña", type="password")
-        password2 = st.text_input("Repetir contraseña", type="password")
-        codigo = st.text_input("Código de invitación")
-        carrera_label = st.selectbox("Carrera", list(opciones.keys()))
-        submit = st.form_submit_button("Registrarme")
-    if submit:
-        if not nombre or not email or not password or not codigo:
-            st.error("Completá todos los campos.")
-        elif password != password2:
-            st.error("Las contraseñas no coinciden.")
-        else:
-            carrera_id = opciones[carrera_label]
-            ok, msg = register_user(email, password, nombre, carrera_id, codigo)
-            if ok:
-                st.success("Cuenta creada. Ya podés iniciar sesión.")
-                st.session_state.pagina = "login"
-                st.rerun()
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
+        st.subheader("Crear cuenta")
+        carreras = get_carreras()
+        opciones = {f"{c[1]} — {c[2]}": c[0] for c in carreras}
+        with st.form("form_registro"):
+            nombre = st.text_input("Nombre completo")
+            email = st.text_input("Email")
+            password = st.text_input("Contraseña", type="password")
+            password2 = st.text_input("Repetir contraseña", type="password")
+            codigo = st.text_input("Código de invitación")
+            carrera_label = st.selectbox("Carrera", list(opciones.keys()))
+            submit = st.form_submit_button("Registrarme", use_container_width=True)
+        if submit:
+            if not nombre or not email or not password or not codigo:
+                st.error("Completá todos los campos.")
+            elif password != password2:
+                st.error("Las contraseñas no coinciden.")
             else:
-                st.error(msg)
-    st.markdown("---")
-    if st.button("← Volver al login"):
-        st.session_state.pagina = "login"
-        st.rerun()
+                carrera_id = opciones[carrera_label]
+                ok, msg = register_user(email, password, nombre, carrera_id, codigo)
+                if ok:
+                    st.success("Cuenta creada. Ya podés iniciar sesión.")
+                    st.session_state.pagina = "login"
+                    st.rerun()
+                else:
+                    st.error(msg)
+        st.markdown("---")
+        if st.button("← Volver al login", use_container_width=True):
+            st.session_state.pagina = "login"
+            st.rerun()
 
 def mostrar_admin():
     st.title("🔧 Panel de Administración")
@@ -100,6 +115,15 @@ def mostrar_admin():
 
 def mostrar_sidebar(usuario):
     with st.sidebar:
+        # Toggle tema
+        tema_label = "🌙 Modo oscuro" if st.session_state.tema_oscuro else "☀️ Modo claro"
+        if st.button(tema_label, use_container_width=True):
+            st.session_state.tema_oscuro = not st.session_state.tema_oscuro
+            st.rerun()
+
+        st.markdown("---")
+
+        # Reloj
         st.components.v1.html("""
             <div style="text-align:center; padding:10px 0;">
                 <div id="reloj" style="font-family:monospace; font-size:32px; font-weight:bold; color:#A78BFA;"></div>
@@ -125,6 +149,7 @@ def mostrar_sidebar(usuario):
 
         st.markdown("---")
 
+        # Calendario
         hoy = datetime.now()
         mes = st.session_state.cal_mes
         anio = st.session_state.cal_anio
@@ -190,7 +215,7 @@ def mostrar_navbar(usuario):
         </div>
     """, unsafe_allow_html=True)
 
-    items = ["🏠 Inicio", "📚 Plan de Estudios", "🗓️ Cursadas", "📝 Notas", "📂 Recursos"]
+    items = ["🏠 Inicio", "📚 Plan de Estudios", "🗓️ Cursadas", "📝 Notas", "📂 Recursos", "👤 Mi Perfil"]
     if usuario.get("es_admin"):
         items.append("🔧 Administración")
 
@@ -200,6 +225,7 @@ def mostrar_navbar(usuario):
         "🗓️ Cursadas": "cursadas",
         "📝 Notas": "evaluaciones",
         "📂 Recursos": "recursos",
+        "👤 Mi Perfil": "perfil",
         "🔧 Administración": "admin",
     }
 
@@ -227,6 +253,9 @@ def mostrar_app():
     elif st.session_state.pagina == "recursos":
         from pages import recursos
         recursos.mostrar(usuario)
+    elif st.session_state.pagina == "perfil":
+        from pages import perfil
+        perfil.mostrar(usuario)
     elif st.session_state.pagina == "admin":
         mostrar_admin()
     else:

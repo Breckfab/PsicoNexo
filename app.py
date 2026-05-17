@@ -100,7 +100,6 @@ def mostrar_admin():
 
 def mostrar_sidebar(usuario):
     with st.sidebar:
-        # Reloj y fecha
         st.components.v1.html("""
             <div style="text-align:center; padding:10px 0;">
                 <div id="reloj" style="font-family:monospace; font-size:32px; font-weight:bold; color:#A78BFA;"></div>
@@ -126,7 +125,6 @@ def mostrar_sidebar(usuario):
 
         st.markdown("---")
 
-        # Calendario
         hoy = datetime.now()
         mes = st.session_state.cal_mes
         anio = st.session_state.cal_anio
@@ -154,13 +152,11 @@ def mostrar_sidebar(usuario):
                     st.session_state.cal_mes = mes + 1
                 st.rerun()
 
-        # Días de la semana
         dias_semana = ["Lu", "Ma", "Mi", "Ju", "Vi", "Sa", "Do"]
         cols = st.columns(7)
         for i, d in enumerate(dias_semana):
             cols[i].markdown(f"<div style='text-align:center; font-size:11px; color:#aaa;'>{d}</div>", unsafe_allow_html=True)
 
-        # Días del mes
         cal = calendar.monthcalendar(anio, mes)
         for semana in cal:
             cols = st.columns(7)
@@ -187,10 +183,10 @@ def mostrar_navbar(usuario):
     """, unsafe_allow_html=True)
 
     st.markdown(f"""
-        <div style="background-color:#1E1E2E; padding:8px 20px; border-radius:10px; margin-bottom:10px;
-                    display:flex; align-items:center; justify-content:space-between;">
-            <span style="color:white; font-size:18px; font-weight:bold;">🧠 PsicoNexo</span>
-            <span style="color:#ccc; font-size:13px;">👤 {usuario['nombre']}</span>
+        <div style="background-color:#1E1E2E; padding:12px 20px; border-radius:10px; margin-bottom:10px;
+                    display:flex; align-items:center; justify-content:center;">
+            <span style="color:white; font-size:28px; font-weight:bold; text-align:center;">🧠 PsicoNexo</span>
+            <span style="color:#ccc; font-size:13px; position:absolute; right:30px;">👤 {usuario['nombre']}</span>
         </div>
     """, unsafe_allow_html=True)
 

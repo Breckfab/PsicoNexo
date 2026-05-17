@@ -95,14 +95,21 @@ def mostrar_admin():
         st.info("No hay códigos generados todavía.")
 
 def mostrar_navbar(usuario):
+    # Título superior centrado fuera del rectángulo
+    st.markdown("""
+        <div style="text-align:center; margin-bottom:8px;">
+            <span style="color:white; font-size:16px; font-weight:600; letter-spacing:2px;">
+                SISTEMA PARA ESTUDIANTES DE PSICOLOGÍA
+            </span>
+        </div>
+    """, unsafe_allow_html=True)
+
+    # Barra navbar
     st.components.v1.html("""
         <div style="background-color:#1E1E2E; padding:8px 20px; border-radius:10px; margin-bottom:10px;
                     display:flex; align-items:center; justify-content:space-between;">
             <div style="display:flex; align-items:center; gap:10px;">
-                <div>
-                    <div style="color:#ccc; font-size:11px; letter-spacing:1px;">SISTEMA PARA ESTUDIANTES DE PSICOLOGÍA</div>
-                    <span style="color:white; font-size:18px; font-weight:bold;">🧠 PsicoNexo</span>
-                </div>
+                <span style="color:white; font-size:18px; font-weight:bold;">🧠 PsicoNexo</span>
             </div>
             <div style="text-align:center;">
                 <div id="reloj" style="font-family:monospace; font-size:20px; font-weight:bold; color:#A78BFA;"></div>

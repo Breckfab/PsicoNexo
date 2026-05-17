@@ -95,7 +95,6 @@ def mostrar_admin():
         st.info("No hay códigos generados todavía.")
 
 def mostrar_navbar(usuario):
-    # Título superior centrado fuera del rectángulo
     st.markdown("""
         <div style="text-align:center; margin-bottom:8px;">
             <span style="color:white; font-size:16px; font-weight:600; letter-spacing:2px;">
@@ -104,7 +103,6 @@ def mostrar_navbar(usuario):
         </div>
     """, unsafe_allow_html=True)
 
-    # Barra navbar
     st.components.v1.html("""
         <div style="background-color:#1E1E2E; padding:8px 20px; border-radius:10px; margin-bottom:10px;
                     display:flex; align-items:center; justify-content:space-between;">
@@ -137,7 +135,7 @@ def mostrar_navbar(usuario):
         </script>
     """, height=70)
 
-    items = ["🏠 Inicio", "📚 Plan de Estudios", "📂 Recursos"]
+    items = ["🏠 Inicio", "📚 Plan de Estudios", "🗓️ Cursadas", "📂 Recursos"]
     if usuario.get("es_admin"):
         items.append("🔧 Administración")
     items.append("🚪 Cerrar sesión")
@@ -146,6 +144,7 @@ def mostrar_navbar(usuario):
     paginas = {
         "🏠 Inicio": "home",
         "📚 Plan de Estudios": "materias",
+        "🗓️ Cursadas": "cursadas",
         "📂 Recursos": "recursos",
         "🔧 Administración": "admin",
         "🚪 Cerrar sesión": "logout"
@@ -174,6 +173,9 @@ def mostrar_app():
     if st.session_state.pagina == "materias":
         from pages import materias
         materias.mostrar(usuario)
+    elif st.session_state.pagina == "cursadas":
+        from pages import cursadas
+        cursadas.mostrar(usuario)
     elif st.session_state.pagina == "recursos":
         from pages import recursos
         recursos.mostrar(usuario)

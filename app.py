@@ -26,9 +26,9 @@ if "cal_anio" not in st.session_state:
     st.session_state.cal_anio = datetime.now().year
 
 def mostrar_login():
-    col1, col2, col3 = st.columns([1, 1, 1])
+    col1, col2, col3 = st.columns([2, 1, 2])
     with col2:
-        st.image("PsicoNexo_png.png", use_container_width=True)
+        st.image("PsicoNexo_png.png", width=150)
     st.subheader("Iniciá sesión")
     with st.form("form_login"):
         email = st.text_input("Email")
@@ -48,9 +48,9 @@ def mostrar_login():
         st.rerun()
 
 def mostrar_registro():
-    col1, col2, col3 = st.columns([1, 1, 1])
+    col1, col2, col3 = st.columns([2, 1, 2])
     with col2:
-        st.image("PsicoNexo_png.png", use_container_width=True)
+        st.image("PsicoNexo_png.png", width=150)
     st.subheader("Crear cuenta")
     carreras = get_carreras()
     opciones = {f"{c[1]} — {c[2]}": c[0] for c in carreras}

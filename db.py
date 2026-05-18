@@ -29,6 +29,10 @@ def init_db():
             nombre TEXT NOT NULL,
             carrera_id INTEGER REFERENCES carreras(id),
             es_admin BOOLEAN DEFAULT FALSE,
+            email_institucional TEXT,
+            campus_virtual TEXT,
+            portal_alumnos TEXT,
+            biblioteca_digital TEXT,
             created_at TIMESTAMP DEFAULT NOW()
         );
     """)
@@ -71,6 +75,78 @@ def init_db():
             usado BOOLEAN DEFAULT FALSE,
             creado_por INTEGER REFERENCES usuarios(id),
             usado_por INTEGER REFERENCES usuarios(id),
+            created_at TIMESTAMP DEFAULT NOW()
+        );
+    """)
+
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS recursos (
+            id SERIAL PRIMARY KEY,
+            usuario_id INTEGER REFERENCES usuarios(id),
+            materia_id INTEGER REFERENCES materias(id),
+            nombre TEXT NOT NULL,
+            tipo TEXT NOT NULL,
+            link TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT NOW()
+        );
+    """)
+
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS cursadas (
+            id SERIAL PRIMARY KEY,
+            usuario_id INTEGER REFERENCES usuarios(id),
+            materia_id INTEGER REFERENCES materias(id),
+            anio_cursada INTEGER NOT NULL,
+            cuatrimestre TEXT NOT NULL,
+            modalidad TEXT NOT NULL,
+            turno TEXT,
+            dias TEXT,
+            horario TEXT,
+            link TEXT,
+            profesor1 TEXT,
+            email_profesor1 TEXT,
+            profesor2 TEXT,
+            email_profesor2 TEXT,
+            created_at TIMESTAMP DEFAULT NOW(),
+            UNIQUE(usuario_id, materia_id, anio_cursada, cuatrimestre)
+        );
+    """)
+
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS evaluaciones (
+            id SERIAL PRIMARY KEY,
+            usuario_id INTEGER REFERENCES usuarios(id),
+            materia_id INTEGER REFERENCES materias(id),
+            tipo TEXT NOT NULL,
+            descripcion TEXT,
+            nota NUMERIC(4,2),
+            fecha DATE,
+            aprobado BOOLEAN,
+            created_at TIMESTAMP DEFAULT NOW()
+        );
+    """)
+
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS tareas (
+            id SERIAL PRIMARY KEY,
+            usuario_id INTEGER REFERENCES usuarios(id),
+            materia_id INTEGER REFERENCES materias(id),
+            numero INTEGER NOT NULL,
+            descripcion TEXT,
+            fecha_vencimiento DATE,
+            completada BOOLEAN DEFAULT FALSE,
+            created_at TIMESTAMP DEFAULT NOW()
+        );
+    """)
+
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS opiniones_profesores (
+            id SERIAL PRIMARY KEY,
+            usuario_id INTEGER REFERENCES usuarios(id),
+            materia_id INTEGER REFERENCES materias(id),
+            profesor TEXT NOT NULL,
+            valoracion TEXT NOT NULL,
+            observaciones TEXT,
             created_at TIMESTAMP DEFAULT NOW()
         );
     """)

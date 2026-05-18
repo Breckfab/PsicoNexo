@@ -28,15 +28,6 @@ if "tema_oscuro" not in st.session_state:
     st.session_state.tema_oscuro = True
 
 def mostrar_login():
-    st.markdown("""
-        <style>
-        .login-container {
-            max-width: 400px;
-            margin: 0 auto;
-            padding: 20px;
-        }
-        </style>
-    """, unsafe_allow_html=True)
     col1, col2, col3 = st.columns([2, 1, 2])
     with col2:
         st.image("PsicoNexo_png.png", width=150)
@@ -115,7 +106,6 @@ def mostrar_admin():
 
 def mostrar_sidebar(usuario):
     with st.sidebar:
-        # Toggle tema
         tema_label = "🌙 Modo oscuro" if st.session_state.tema_oscuro else "☀️ Modo claro"
         if st.button(tema_label, use_container_width=True):
             st.session_state.tema_oscuro = not st.session_state.tema_oscuro
@@ -123,7 +113,6 @@ def mostrar_sidebar(usuario):
 
         st.markdown("---")
 
-        # Reloj
         st.components.v1.html("""
             <div style="text-align:center; padding:10px 0;">
                 <div id="reloj" style="font-family:monospace; font-size:32px; font-weight:bold; color:#A78BFA;"></div>
@@ -149,7 +138,6 @@ def mostrar_sidebar(usuario):
 
         st.markdown("---")
 
-        # Calendario
         hoy = datetime.now()
         mes = st.session_state.cal_mes
         anio = st.session_state.cal_anio
@@ -215,7 +203,7 @@ def mostrar_navbar(usuario):
         </div>
     """, unsafe_allow_html=True)
 
-    items = ["🏠 Inicio", "📚 Plan de Estudios", "🗓️ Cursadas", "📝 Notas", "📂 Recursos", "👤 Mi Perfil"]
+    items = ["🏠 Inicio", "📚 Plan de Estudios", "🗓️ Cursadas", "📝 Notas", "📂 Recursos", "⭐ Profesores", "👤 Mi Perfil"]
     if usuario.get("es_admin"):
         items.append("🔧 Administración")
 
@@ -225,6 +213,7 @@ def mostrar_navbar(usuario):
         "🗓️ Cursadas": "cursadas",
         "📝 Notas": "evaluaciones",
         "📂 Recursos": "recursos",
+        "⭐ Profesores": "profesores",
         "👤 Mi Perfil": "perfil",
         "🔧 Administración": "admin",
     }
@@ -256,6 +245,9 @@ def mostrar_app():
     elif st.session_state.pagina == "perfil":
         from pages import perfil
         perfil.mostrar(usuario)
+    elif st.session_state.pagina == "profesores":
+        from pages import profesores
+        profesores.mostrar(usuario)
     elif st.session_state.pagina == "admin":
         mostrar_admin()
     else:

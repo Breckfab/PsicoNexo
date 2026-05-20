@@ -152,6 +152,17 @@ def init_db():
     """)
 
     cur.execute("""
+        CREATE TABLE IF NOT EXISTS programas (
+            id SERIAL PRIMARY KEY,
+            usuario_id INTEGER REFERENCES usuarios(id),
+            materia_id INTEGER REFERENCES materias(id),
+            link TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT NOW(),
+            UNIQUE(usuario_id, materia_id)
+        );
+    """)
+
+    cur.execute("""
         INSERT INTO carreras (nombre, universidad)
         VALUES ('Licenciatura en Psicología', 'UdeMM')
         ON CONFLICT (nombre, universidad) DO NOTHING;
@@ -174,3 +185,5 @@ def crear_admin_si_no_existe():
         conn.commit()
     cur.close()
     conn.close()
+
+

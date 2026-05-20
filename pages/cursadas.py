@@ -78,6 +78,27 @@ def borrar_cursada(usuario_id, materia_id):
     cur.close()
     conn.close()
 
+def get_programa(usuario_id, materia_id):
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT link FROM programas
+        WHERE usuario_id = %s AND materia_id = %s;
+    """, (usuario_id, materia_id))
+    row = cur.fetchone()
+    cur.close()
+    conn.close()
+    return row[0] if row else None
+
+def convertir_link_drive(link):
+    if "drive.google.com" in link and "/file/d/" in link:
+        try:
+            file_id = link.split("/file/d/")[1].split("/")[0]
+            return f"https://drive.google.com/file/d/{file_id}/preview"
+        except:
+            return None
+    return None
+
 def get_tareas(usuario_id, materia_id):
     conn = get_connection()
     cur = conn.cursor()
@@ -167,6 +188,7 @@ def mostrar(usuario):
             for m in materias_cursando:
                 mid, mnombre, manio = m
                 cursada = get_cursada(usuario["id"], mid)
+                programa_link = get_programa(usuario["id"], mid)
                 with st.expander(f"{nombres_anio.get(manio, '')} — {mnombre}"):
                     if cursada:
                         cid, anio, cuatri, modalidad, dias, horario, link, prof1, email_prof1, prof2, email_prof2, turno = cursada
@@ -189,6 +211,21 @@ def mostrar(usuario):
                                     st.markdown(f"📧 {email_prof2}")
                         if link:
                             st.markdown(f"[🔗 Acceder a la clase]({link})")
+
+                        # Botón programa dentro de cursada
+                        if programa_link:
+                            st.markdown("---")
+                            col_prog1, col_prog2 = st.columns(2)
+                            with col_prog1:
+                                st.markdown(f"[📋 Ver programa]({programa_link})")
+                            with col_prog2:
+                                preview_url = convertir_link_drive(programa_link)
+                                if preview_url:
+                                    if st.button("👁️ Ver PDF", key=f"pdf_prog_cursada_{mid}", use_container_width=True):
+                                        st.session_state[f"viendo_pdf_cursada_{mid}"] = not st.session_state.get(f"viendo_pdf_cursada_{mid}", False)
+                                        st.rerun()
+                            if st.session_state.get(f"viendo_pdf_cursada_{mid}") and convertir_link_drive(programa_link):
+                                st.components.v1.iframe(convertir_link_drive(programa_link), height=500)
 
                         col_edit, col_borrar = st.columns(2)
                         with col_edit:
@@ -232,6 +269,8 @@ def mostrar(usuario):
                                 st.rerun()
                     else:
                         st.warning("Sin datos de cursada cargados.")
+                        if programa_link:
+                            st.markdown(f"[📋 Ver programa]({programa_link})")
 
     with tab2:
         todas = get_todas_materias(usuario["carrera_id"])
@@ -336,3 +375,5 @@ def mostrar(usuario):
                                 guardar_tarea(usuario["id"], materia_tarea_id, num, desc, fecha)
                                 st.session_state[f"tarea_key_{num}"] += 1
                                 st.rerun()
+
+

@@ -112,10 +112,7 @@ def mostrar(usuario):
                 st.markdown(f"**{rnombre}**")
                 preview_url = convertir_link_preview(rlink)
                 if preview_url:
-                    if "dropbox.com" in rlink:
-                        st.markdown(f"[🔗 Abrir en Dropbox]({rlink})")
-                    else:
-                        st.markdown(f"[🔗 Abrir en Drive]({rlink})")
+                    st.markdown(f"[🔗 Abrir]({rlink})")
                     with st.expander("👁️ Ver PDF"):
                         st.components.v1.iframe(preview_url, height=500)
                 else:

@@ -1,268 +1,256 @@
 import streamlit as st
-from db import init_db, crear_admin_si_no_existe
-from auth import login_user, register_user, logout, get_carreras, generar_codigo, get_codigos
-import calendar
-from datetime import datetime
+from db import get_connection
+from io import BytesIO
+from reportlab.lib.pagesizes import A4
+from reportlab.lib import colors
+from reportlab.lib.units import cm
+from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.enums import TA_CENTER
 
-st.set_page_config(page_title="PsicoNexo", page_icon="Psicologia_favicon_png.png", layout="wide")
+def get_historial(usuario_id, carrera_id):
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT m.nombre, m.anio, m.cuatrimestre, am.estado,
+               c.anio_cursada, c.cuatrimestre as cuatri_cursada, c.profesor1,
+               AVG(e.nota) as promedio
+        FROM materias m
+        LEFT JOIN alumno_materias am ON m.id = am.materia_id AND am.usuario_id = %s
+        LEFT JOIN cursadas c ON m.id = c.materia_id AND c.usuario_id = %s
+        LEFT JOIN evaluaciones e ON m.id = e.materia_id AND e.usuario_id = %s
+        WHERE m.carrera_id = %s
+        AND am.estado IS NOT NULL
+        AND am.estado != 'pendiente'
+        GROUP BY m.nombre, m.anio, m.cuatrimestre, am.estado,
+                 c.anio_cursada, c.cuatrimestre, c.profesor1
+        ORDER BY m.anio, m.cuatrimestre, m.nombre;
+    """, (usuario_id, usuario_id, usuario_id, carrera_id))
+    rows = cur.fetchall()
+    cur.close()
+    conn.close()
+    return rows
 
-if "usuario" not in st.session_state or st.session_state.usuario is None:
-    st.markdown("""
-        <style>
-        [data-testid="stSidebar"] {display: none;}
-        </style>
-    """, unsafe_allow_html=True)
+def get_nombre_usuario(usuario_id):
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("SELECT nombre FROM usuarios WHERE id = %s;", (usuario_id,))
+    row = cur.fetchone()
+    cur.close()
+    conn.close()
+    return row[0] if row else "Alumno"
 
-init_db()
-crear_admin_si_no_existe()
+def generar_pdf(historial, nombre_alumno, filtros):
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(
+        buffer,
+        pagesize=A4,
+        rightMargin=2*cm,
+        leftMargin=2*cm,
+        topMargin=2*cm,
+        bottomMargin=2*cm
+    )
 
-if "usuario" not in st.session_state:
-    st.session_state.usuario = None
-if "pagina" not in st.session_state:
-    st.session_state.pagina = "login"
-if "cal_mes" not in st.session_state:
-    st.session_state.cal_mes = datetime.now().month
-if "cal_anio" not in st.session_state:
-    st.session_state.cal_anio = datetime.now().year
-if "tema_oscuro" not in st.session_state:
-    st.session_state.tema_oscuro = True
+    styles = getSampleStyleSheet()
+    titulo_style = ParagraphStyle(
+        "titulo",
+        parent=styles["Title"],
+        fontSize=18,
+        textColor=colors.HexColor("#7B2FBE"),
+        alignment=TA_CENTER,
+        spaceAfter=4
+    )
+    subtitulo_style = ParagraphStyle(
+        "subtitulo",
+        parent=styles["Normal"],
+        fontSize=10,
+        textColor=colors.HexColor("#888888"),
+        alignment=TA_CENTER,
+        spaceAfter=2
+    )
+    info_style = ParagraphStyle(
+        "info",
+        parent=styles["Normal"],
+        fontSize=10,
+        textColor=colors.HexColor("#333333"),
+        spaceAfter=2
+    )
 
-def mostrar_login():
-    col1, col2, col3 = st.columns([2, 1, 2])
-    with col2:
-        st.image("PsicoNexo_png.png", width=150)
-    col1, col2, col3 = st.columns([1, 2, 1])
-    with col2:
-        st.subheader("Iniciá sesión")
-        with st.form("form_login"):
-            email = st.text_input("Email")
-            password = st.text_input("Contraseña", type="password")
-            submit = st.form_submit_button("Ingresar", use_container_width=True)
-        if submit:
-            ok, msg, user = login_user(email, password)
-            if ok:
-                st.session_state.usuario = user
-                st.session_state.pagina = "home"
-                st.rerun()
-            else:
-                st.error(msg)
-        st.markdown("---")
-        if st.button("¿No tenés cuenta? Registrate", use_container_width=True):
-            st.session_state.pagina = "registro"
-            st.rerun()
-
-def mostrar_registro():
-    col1, col2, col3 = st.columns([2, 1, 2])
-    with col2:
-        st.image("PsicoNexo_png.png", width=150)
-    col1, col2, col3 = st.columns([1, 2, 1])
-    with col2:
-        st.subheader("Crear cuenta")
-        carreras = get_carreras()
-        opciones = {f"{c[1]} — {c[2]}": c[0] for c in carreras}
-        with st.form("form_registro"):
-            nombre = st.text_input("Nombre completo")
-            email = st.text_input("Email")
-            password = st.text_input("Contraseña", type="password")
-            password2 = st.text_input("Repetir contraseña", type="password")
-            codigo = st.text_input("Código de invitación")
-            carrera_label = st.selectbox("Carrera", list(opciones.keys()))
-            submit = st.form_submit_button("Registrarme", use_container_width=True)
-        if submit:
-            if not nombre or not email or not password or not codigo:
-                st.error("Completá todos los campos.")
-            elif password != password2:
-                st.error("Las contraseñas no coinciden.")
-            else:
-                carrera_id = opciones[carrera_label]
-                ok, msg = register_user(email, password, nombre, carrera_id, codigo)
-                if ok:
-                    st.success("Cuenta creada. Ya podés iniciar sesión.")
-                    st.session_state.pagina = "login"
-                    st.rerun()
-                else:
-                    st.error(msg)
-        st.markdown("---")
-        if st.button("← Volver al login", use_container_width=True):
-            st.session_state.pagina = "login"
-            st.rerun()
-
-def mostrar_admin():
-    st.title("🔧 Panel de Administración")
-    usuario = st.session_state.usuario
-    st.markdown("### Generar código de invitación")
-    if st.button("Generar nuevo código"):
-        codigo = generar_codigo(usuario["id"])
-        st.success(f"Código generado: **{codigo}**")
-    st.markdown("### Códigos generados")
-    codigos = get_codigos(usuario["id"])
-    if codigos:
-        for c in codigos:
-            estado = "✅ Usado" if c[1] else "⏳ Disponible"
-            usado_por = f" — usado por {c[2]}" if c[2] else ""
-            st.markdown(f"**{c[0]}** — {estado}{usado_por}")
-    else:
-        st.info("No hay códigos generados todavía.")
-
-def mostrar_sidebar(usuario):
-    with st.sidebar:
-        tema_label = "🌙 Modo oscuro" if st.session_state.tema_oscuro else "☀️ Modo claro"
-        if st.button(tema_label, use_container_width=True):
-            st.session_state.tema_oscuro = not st.session_state.tema_oscuro
-            st.rerun()
-
-        st.markdown("---")
-
-        st.components.v1.html("""
-            <div style="text-align:center; padding:10px 0;">
-                <div id="reloj" style="font-family:monospace; font-size:32px; font-weight:bold; color:#A78BFA;"></div>
-                <div id="fecha" style="font-size:12px; color:#aaa; margin-top:4px;"></div>
-            </div>
-            <script>
-            const dias = ['Domingo','Lunes','Martes','Miércoles','Jueves','Viernes','Sábado'];
-            const meses = ['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'];
-            function actualizar() {
-                const now = new Date();
-                const h = String(now.getHours()).padStart(2,'0');
-                const m = String(now.getMinutes()).padStart(2,'0');
-                const s = String(now.getSeconds()).padStart(2,'0');
-                document.getElementById('reloj').textContent = h + ':' + m + ':' + s;
-                const dia = dias[now.getDay()];
-                const fecha = now.getDate() + ' de ' + meses[now.getMonth()] + ' de ' + now.getFullYear();
-                document.getElementById('fecha').textContent = dia + ', ' + fecha;
-            }
-            actualizar();
-            setInterval(actualizar, 1000);
-            </script>
-        """, height=80)
-
-        st.markdown("---")
-
-        hoy = datetime.now()
-        mes = st.session_state.cal_mes
-        anio = st.session_state.cal_anio
-
-        nombres_meses = ["Enero","Febrero","Marzo","Abril","Mayo","Junio",
-                         "Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"]
-
-        col_prev, col_titulo, col_next = st.columns([1, 3, 1])
-        with col_prev:
-            if st.button("◀", key="cal_prev"):
-                if mes == 1:
-                    st.session_state.cal_mes = 12
-                    st.session_state.cal_anio = anio - 1
-                else:
-                    st.session_state.cal_mes = mes - 1
-                st.rerun()
-        with col_titulo:
-            st.markdown(f"<div style='text-align:center; font-weight:bold; font-size:13px;'>{nombres_meses[mes-1]} {anio}</div>", unsafe_allow_html=True)
-        with col_next:
-            if st.button("▶", key="cal_next"):
-                if mes == 12:
-                    st.session_state.cal_mes = 1
-                    st.session_state.cal_anio = anio + 1
-                else:
-                    st.session_state.cal_mes = mes + 1
-                st.rerun()
-
-        dias_semana = ["Lu", "Ma", "Mi", "Ju", "Vi", "Sa", "Do"]
-        cols = st.columns(7)
-        for i, d in enumerate(dias_semana):
-            cols[i].markdown(f"<div style='text-align:center; font-size:11px; color:#aaa;'>{d}</div>", unsafe_allow_html=True)
-
-        cal = calendar.monthcalendar(anio, mes)
-        for semana in cal:
-            cols = st.columns(7)
-            for i, dia in enumerate(semana):
-                if dia == 0:
-                    cols[i].markdown(" ")
-                elif dia == hoy.day and mes == hoy.month and anio == hoy.year:
-                    cols[i].markdown(f"<div style='text-align:center; background:#7B2FBE; color:white; border-radius:50%; font-size:12px; font-weight:bold;'>{dia}</div>", unsafe_allow_html=True)
-                else:
-                    cols[i].markdown(f"<div style='text-align:center; font-size:12px;'>{dia}</div>", unsafe_allow_html=True)
-
-        st.markdown("---")
-        if st.button("🚪 Cerrar sesión", use_container_width=True):
-            logout()
-            st.rerun()
-
-def mostrar_navbar(usuario):
-    st.markdown("""
-        <div style="text-align:center; margin-bottom:8px;">
-            <span style="color:white; font-size:16px; font-weight:600; letter-spacing:2px;">
-                SISTEMA PARA ESTUDIANTES DE PSICOLOGÍA
-            </span>
-        </div>
-    """, unsafe_allow_html=True)
-
-    st.markdown(f"""
-        <div style="background-color:#1E1E2E; padding:12px 20px; border-radius:10px; margin-bottom:10px;
-                    display:flex; align-items:center; justify-content:center; position:relative;">
-            <span style="color:white; font-size:28px; font-weight:bold; text-align:center;">🧠 PsicoNexo</span>
-            <span style="color:#ccc; font-size:13px; position:absolute; right:30px;">👤 {usuario['nombre']}</span>
-        </div>
-    """, unsafe_allow_html=True)
-
-    items = ["🏠 Inicio", "📚 Plan de Estudios", "🗓️ Cursadas", "📝 Notas", "📂 Recursos", "⭐ Profesores", "📜 Historial", "👤 Mi Perfil"]
-    if usuario.get("es_admin"):
-        items.append("🔧 Administración")
-
-    paginas = {
-        "🏠 Inicio": "home",
-        "📚 Plan de Estudios": "materias",
-        "🗓️ Cursadas": "cursadas",
-        "📝 Notas": "evaluaciones",
-        "📂 Recursos": "recursos",
-        "⭐ Profesores": "profesores",
-        "📜 Historial": "historial",
-        "👤 Mi Perfil": "perfil",
-        "🔧 Administración": "admin",
+    nombres_anio = {1: "1° Año", 2: "2° Año", 3: "3° Año", 4: "4° Año", 5: "5° Año"}
+    cuatri_texto_map = {
+        "1": "1° cuatrimestre",
+        "2": "2° cuatrimestre",
+        "anual": "Anual",
+        "1° Cuatrimestre": "1° cuatrimestre",
+        "2° Cuatrimestre": "2° cuatrimestre",
+        "Anual": "Anual",
     }
 
-    cols = st.columns(len(items))
-    for i, item in enumerate(items):
-        with cols[i]:
-            if st.button(item, use_container_width=True):
-                st.session_state.pagina = paginas[item]
-                st.rerun()
+    elementos = []
 
-def mostrar_app():
-    usuario = st.session_state.usuario
-    mostrar_sidebar(usuario)
-    mostrar_navbar(usuario)
+    # Encabezado
+    elementos.append(Paragraph("🧠 PsicoNexo", titulo_style))
+    elementos.append(Paragraph("Historial Académico", subtitulo_style))
+    elementos.append(Paragraph("Licenciatura en Psicología — UdeMM", subtitulo_style))
+    elementos.append(Spacer(1, 0.3*cm))
+    elementos.append(Paragraph(f"Alumno/a: {nombre_alumno}", info_style))
 
-    if st.session_state.pagina == "materias":
-        from pages import materias
-        materias.mostrar(usuario)
-    elif st.session_state.pagina == "cursadas":
-        from pages import cursadas
-        cursadas.mostrar(usuario)
-    elif st.session_state.pagina == "evaluaciones":
-        from pages import evaluaciones
-        evaluaciones.mostrar(usuario)
-    elif st.session_state.pagina == "recursos":
-        from pages import recursos
-        recursos.mostrar(usuario)
-    elif st.session_state.pagina == "perfil":
-        from pages import perfil
-        perfil.mostrar(usuario)
-    elif st.session_state.pagina == "profesores":
-        from pages import profesores
-        profesores.mostrar(usuario)
-    elif st.session_state.pagina == "historial":
-        from pages import historial
-        historial.mostrar(usuario)
-    elif st.session_state.pagina == "admin":
-        mostrar_admin()
-    else:
-        from pages import home
-        home.mostrar(usuario)
+    filtros_texto = []
+    if filtros.get("estado") != "Todos":
+        filtros_texto.append(f"Estado: {filtros['estado']}")
+    if filtros.get("anio") != "Todos":
+        filtros_texto.append(f"Año: {filtros['anio']}")
+    if filtros.get("cuatri") != "Todos":
+        filtros_texto.append(f"Cuatrimestre: {filtros['cuatri']}")
+    if filtros_texto:
+        elementos.append(Paragraph(f"Filtros aplicados: {' · '.join(filtros_texto)}", info_style))
 
-if st.session_state.usuario is None:
-    if st.session_state.pagina == "registro":
-        mostrar_registro()
-    else:
-        mostrar_login()
-else:
-    mostrar_app()
+    elementos.append(Paragraph(f"Total de materias: {len(historial)}", info_style))
+    elementos.append(Spacer(1, 0.5*cm))
 
+    # Tabla
+    encabezado = ["Materia", "Año", "Estado", "Cursada", "Promedio"]
+    datos = [encabezado]
+
+    for h in historial:
+        mnombre, manio, mcuatri, estado, anio_cursada, cuatri_cursada, profesor1, promedio = h
+        anio_texto = nombres_anio.get(manio, f"Año {manio}")
+        cursada_texto = str(anio_cursada) if anio_cursada else "—"
+        promedio_texto = f"{float(promedio):.2f}" if promedio is not None else "—"
+        datos.append([
+            mnombre,
+            anio_texto,
+            estado.capitalize(),
+            cursada_texto,
+            promedio_texto,
+        ])
+
+    tabla = Table(datos, colWidths=[7.5*cm, 2.5*cm, 3*cm, 2.5*cm, 2*cm])
+    tabla.setStyle(TableStyle([
+        # Encabezado
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#7B2FBE")),
+        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+        ("FONTSIZE", (0, 0), (-1, 0), 10),
+        ("ALIGN", (0, 0), (-1, 0), "CENTER"),
+        ("BOTTOMPADDING", (0, 0), (-1, 0), 8),
+        ("TOPPADDING", (0, 0), (-1, 0), 8),
+        # Filas
+        ("FONTNAME", (0, 1), (-1, -1), "Helvetica"),
+        ("FONTSIZE", (0, 1), (-1, -1), 9),
+        ("ALIGN", (1, 1), (-1, -1), "CENTER"),
+        ("ALIGN", (0, 1), (0, -1), "LEFT"),
+        ("TOPPADDING", (0, 1), (-1, -1), 6),
+        ("BOTTOMPADDING", (0, 1), (-1, -1), 6),
+        # Filas alternadas
+        *[("BACKGROUND", (0, i), (-1, i), colors.HexColor("#F3F0FF")) for i in range(2, len(datos), 2)],
+        # Grilla
+        ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#CCCCCC")),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#F3F0FF")]),
+    ]))
+
+    elementos.append(tabla)
+    doc.build(elementos)
+    buffer.seek(0)
+    return buffer
+
+def mostrar(usuario):
+    st.title("📜 Historial Académico")
+    st.caption("Licenciatura en Psicología — UdeMM")
+
+    historial = get_historial(usuario["id"], usuario["carrera_id"])
+
+    if not historial:
+        st.info("Todavía no tenés materias con estado registrado.")
+        return
+
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        estados_disponibles = sorted(set(h[3] for h in historial if h[3]))
+        filtro_estado = st.selectbox("Filtrar por estado", ["Todos"] + estados_disponibles)
+    with col2:
+        anios_disponibles = sorted(set(h[1] for h in historial))
+        nombres_anio = {1: "1° Año", 2: "2° Año", 3: "3° Año", 4: "4° Año", 5: "5° Año"}
+        anios_opciones = ["Todos"] + [nombres_anio.get(a, str(a)) for a in anios_disponibles]
+        filtro_anio = st.selectbox("Filtrar por año de la carrera", anios_opciones)
+    with col3:
+        cuatris_disponibles = sorted(set(h[2] for h in historial if h[2]))
+        filtro_cuatri = st.selectbox("Filtrar por cuatrimestre", ["Todos"] + cuatris_disponibles)
+
+    resultado = historial
+    if filtro_estado != "Todos":
+        resultado = [h for h in resultado if h[3] == filtro_estado]
+    if filtro_anio != "Todos":
+        anio_num = [k for k, v in nombres_anio.items() if v == filtro_anio]
+        if anio_num:
+            resultado = [h for h in resultado if h[1] == anio_num[0]]
+    if filtro_cuatri != "Todos":
+        resultado = [h for h in resultado if h[2] == filtro_cuatri]
+
+    if not resultado:
+        st.info("No hay materias que coincidan con los filtros seleccionados.")
+        return
+
+    st.markdown("---")
+
+    col_count, col_pdf = st.columns([3, 1])
+    with col_count:
+        st.markdown(f"**{len(resultado)} materia{'s' if len(resultado) > 1 else ''} encontrada{'s' if len(resultado) > 1 else ''}**")
+    with col_pdf:
+        nombre_alumno = get_nombre_usuario(usuario["id"])
+        filtros = {"estado": filtro_estado, "anio": filtro_anio, "cuatri": filtro_cuatri}
+        pdf_buffer = generar_pdf(resultado, nombre_alumno, filtros)
+        st.download_button(
+            label="⬇️ Descargar PDF",
+            data=pdf_buffer,
+            file_name="historial_academico.pdf",
+            mime="application/pdf",
+            use_container_width=True
+        )
+
+    COLORES = {
+        "cursando": "🟡",
+        "regular": "🟠",
+        "promocionada": "🟢",
+        "aprobada": "🟢",
+        "desaprobada": "🔴",
+    }
+
+    cuatri_texto_map = {
+        "1": "1° cuatrimestre",
+        "2": "2° cuatrimestre",
+        "anual": "Anual",
+        "1° Cuatrimestre": "1° cuatrimestre",
+        "2° Cuatrimestre": "2° cuatrimestre",
+        "Anual": "Anual",
+    }
+
+    for h in resultado:
+        mnombre, manio, mcuatri, estado, anio_cursada, cuatri_cursada, profesor1, promedio = h
+
+        icono = COLORES.get(estado, "⬜")
+        anio_texto = nombres_anio.get(manio, f"Año {manio}")
+        cuatri_texto = cuatri_texto_map.get(mcuatri, mcuatri)
+
+        col1, col2, col3, col4 = st.columns([3, 1, 1, 1])
+        with col1:
+            st.markdown(f"{icono} **{mnombre}**")
+            st.caption(f"{anio_texto} · {cuatri_texto}")
+        with col2:
+            st.markdown(f"**Estado**")
+            st.markdown(f"{estado.capitalize()}")
+        with col3:
+            st.markdown(f"**Cursada**")
+            if anio_cursada and cuatri_cursada:
+                st.markdown(f"{anio_cursada} · {cuatri_cursada}")
+            else:
+                st.markdown("—")
+        with col4:
+            st.markdown(f"**Promedio**")
+            if promedio is not None:
+                color = "#2ecc71" if promedio >= 6 else "#e74c3c"
+                st.markdown(f"<span style='color:{color}; font-weight:bold;'>{float(promedio):.2f}</span>", unsafe_allow_html=True)
+            else:
+                st.markdown("—")
+
+        st.markdown("---")

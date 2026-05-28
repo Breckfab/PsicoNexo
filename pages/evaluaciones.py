@@ -2,7 +2,7 @@ import streamlit as st
 from db import get_connection
 from datetime import date
 
-TIPOS = ["Parcial", "Trabajo Práctico", "Recuperatorio", "Final"]
+TIPOS = ["Parcial", "Trabajo Práctico", "Recuperatorio", "Reincorporatorio", "Final"]
 
 def get_todas_materias(carrera_id):
     conn = get_connection()
@@ -65,22 +65,20 @@ def mostrar(usuario):
 
     evaluaciones = get_evaluaciones(usuario["id"], materia_id)
 
-    # Promedio general
     notas = [e[3] for e in evaluaciones if e[3] is not None]
     if notas:
         promedio = sum(notas) / len(notas)
         color = "#2ecc71" if promedio >= 6 else "#e74c3c"
         st.markdown(f"""
-            <div style="background-color:#1E1E2E; padding:12px 20px; border-radius:10px; 
+            <div style="background-color:#1E1E2E; padding:12px 20px; border-radius:10px;
                         display:flex; justify-content:space-between; align-items:center; margin-bottom:15px;">
                 <span style="color:white; font-size:16px;">📊 Promedio general</span>
                 <span style="color:{color}; font-size:28px; font-weight:bold;">{promedio:.2f}</span>
             </div>
         """, unsafe_allow_html=True)
 
-    # Tabs por tipo
-    tabs = st.tabs(["📋 Parciales", "📄 Trabajos Prácticos", "🔄 Recuperatorios", "🎓 Final"])
-    tipos_tab = ["Parcial", "Trabajo Práctico", "Recuperatorio", "Final"]
+    tabs = st.tabs(["📋 Parciales", "📄 Trabajos Prácticos", "🔄 Recuperatorios", "🔁 Reincorporatorios", "🎓 Final"])
+    tipos_tab = ["Parcial", "Trabajo Práctico", "Recuperatorio", "Reincorporatorio", "Final"]
 
     for tab, tipo in zip(tabs, tipos_tab):
         with tab:
@@ -102,20 +100,19 @@ def mostrar(usuario):
                         aprobado_icon = "✅" if eaprobado else "❌"
                         st.markdown(f"{aprobado_icon} {desc_text} — Nota: {nota_text} — Fecha: {fecha_text}")
                     with col2:
-                        if st.button("🗑️", key=f"del_eval_{eid}"):
+                        if st.button("🗑️ Borrar", key=f"del_eval_{eid}", use_container_width=True):
                             eliminar_evaluacion(eid)
                             st.rerun()
             else:
                 st.info(f"No hay {tipo.lower()}s cargados.")
 
-            # Formulario para agregar
             with st.expander(f"➕ Agregar {tipo}"):
                 with st.form(f"form_{tipo.replace(' ', '_')}"):
                     descripcion = st.text_input("Descripción (ej: Parcial 1, TP N°2)")
                     nota = st.number_input("Nota", min_value=0.0, max_value=10.0, step=0.25, value=0.0)
                     fecha = st.date_input("Fecha", value=date.today())
                     aprobado = st.checkbox("¿Aprobado?", value=nota >= 6)
-                    submit = st.form_submit_button("Guardar")
+                    submit = st.form_submit_button("💾 Guardar", use_container_width=True)
                 if submit:
                     agregar_evaluacion(usuario["id"], materia_id, tipo, descripcion, nota, fecha, aprobado)
                     st.success(f"{tipo} guardado.")

@@ -30,6 +30,22 @@ def get_materias_con_estado(usuario_id, carrera_id):
     conn.close()
     return rows
 
+def get_correlatividades(materia_id, usuario_id):
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT m.nombre, COALESCE(am.estado, 'pendiente') as estado
+        FROM correlatividades c
+        JOIN materias m ON c.requiere_materia_id = m.id
+        LEFT JOIN alumno_materias am ON am.materia_id = m.id AND am.usuario_id = %s
+        WHERE c.materia_id = %s
+        ORDER BY m.anio, m.nombre;
+    """, (usuario_id, materia_id))
+    rows = cur.fetchall()
+    cur.close()
+    conn.close()
+    return rows
+
 def actualizar_estado(usuario_id, materia_id, nuevo_estado):
     conn = get_connection()
     cur = conn.cursor()
@@ -103,7 +119,6 @@ def mostrar(usuario):
         st.warning("No se encontraron materias para tu carrera.")
         return
 
-    # Búsqueda
     busqueda = st.text_input("🔍 Buscar materia", placeholder="Escribí el nombre de la materia...")
 
     if busqueda.strip():
@@ -162,6 +177,14 @@ def mostrar(usuario):
                     if st.button("➕ Programa", key=f"add_prog_{mid}", use_container_width=True):
                         st.session_state[f"cargando_programa_{mid}"] = True
                         st.rerun()
+
+            # Correlatividades
+            correlativas = get_correlatividades(mid, usuario["id"])
+            if correlativas:
+                with st.expander(f"📎 Correlativas ({len(correlativas)})", expanded=False):
+                    for cnombre, cestado in correlativas:
+                        icono = COLORES.get(cestado, "⬜")
+                        st.markdown(f"{icono} {cnombre} — *{cestado.capitalize()}*")
 
             # Panel de programa (ver/editar/borrar)
             if programa and st.session_state.get(f"viendo_programa_{mid}"):

@@ -78,11 +78,17 @@ def borrar_programa(usuario_id, materia_id):
     cur.close()
     conn.close()
 
-def convertir_link_drive(link):
+def convertir_link_preview(link):
     if "drive.google.com" in link and "/file/d/" in link:
         try:
             file_id = link.split("/file/d/")[1].split("/")[0]
             return f"https://drive.google.com/file/d/{file_id}/preview"
+        except:
+            return None
+    if "dropbox.com" in link:
+        try:
+            url = link.split("?")[0]
+            return f"{url}?raw=1"
         except:
             return None
     return None
@@ -96,6 +102,15 @@ def mostrar(usuario):
     if not materias:
         st.warning("No se encontraron materias para tu carrera.")
         return
+
+    # Búsqueda
+    busqueda = st.text_input("🔍 Buscar materia", placeholder="Escribí el nombre de la materia...")
+
+    if busqueda.strip():
+        materias = [m for m in materias if busqueda.strip().lower() in m[2].lower()]
+        if not materias:
+            st.info("No se encontraron materias que coincidan con la búsqueda.")
+            return
 
     por_anio = {}
     for m in materias:
@@ -153,7 +168,7 @@ def mostrar(usuario):
                 pid, plink = programa
                 with st.container():
                     st.markdown(f"🔗 [Abrir programa]({plink})")
-                    preview_url = convertir_link_drive(plink)
+                    preview_url = convertir_link_preview(plink)
                     if preview_url:
                         with st.expander("👁️ Ver PDF"):
                             st.components.v1.iframe(preview_url, height=500)
@@ -186,7 +201,7 @@ def mostrar(usuario):
             # Panel de carga nuevo programa
             if not programa and st.session_state.get(f"cargando_programa_{mid}"):
                 with st.form(f"form_prog_{mid}"):
-                    nuevo_link = st.text_input("Link del programa (Google Drive, PDF, etc.)")
+                    nuevo_link = st.text_input("Link del programa (Google Drive, Dropbox, PDF, etc.)")
                     col1f, col2f = st.columns(2)
                     with col1f:
                         if st.form_submit_button("💾 Guardar", use_container_width=True):
@@ -200,5 +215,3 @@ def mostrar(usuario):
                             st.rerun()
 
         st.markdown("---")
-
-

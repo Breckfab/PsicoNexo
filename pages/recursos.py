@@ -8,8 +8,9 @@ def get_materias_alumno(usuario_id, carrera_id):
     cur = conn.cursor()
     cur.execute("""
         SELECT id, nombre, anio FROM materias
+        WHERE carrera_id = %s
         ORDER BY anio, nombre;
-    """)
+    """, (carrera_id,))
     rows = cur.fetchall()
     cur.close()
     conn.close()

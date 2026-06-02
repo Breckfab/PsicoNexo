@@ -1,5 +1,5 @@
 import streamlit as st
-from db import get_connection
+from db import get_conn
 from datetime import datetime, date
 
 MODALIDADES = ["Presencial", "Híbrida", "Asincrónica"]
@@ -7,88 +7,139 @@ TURNOS = ["Mañana", "Tarde", "Noche"]
 CUATRIMESTRES = ["1° Cuatrimestre", "2° Cuatrimestre", "Anual"]
 DIAS = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado"]
 
+@st.cache_data(ttl=60)
 def get_materias_cursando(usuario_id, carrera_id):
-    conn = get_connection()
-    cur = conn.cursor()
-    cur.execute("""
-        SELECT m.id, m.nombre, m.anio
-        FROM materias m
-        JOIN alumno_materias am ON m.id = am.materia_id
-        WHERE am.usuario_id = %s AND am.estado = 'cursando'
-        AND m.carrera_id = %s
-        ORDER BY m.anio, m.nombre;
-    """, (usuario_id, carrera_id))
-    rows = cur.fetchall()
-    cur.close()
-    conn.close()
-    return rows
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT m.id, m.nombre, m.anio
+                FROM materias m
+                JOIN alumno_materias am ON m.id = am.materia_id
+                WHERE am.usuario_id = %s AND am.estado = 'cursando'
+                AND m.carrera_id = %s
+                ORDER BY m.anio, m.nombre;
+            """, (usuario_id, carrera_id))
+            return cur.fetchall()
 
+@st.cache_data(ttl=120)
 def get_todas_materias(carrera_id):
-    conn = get_connection()
-    cur = conn.cursor()
-    cur.execute("""
-        SELECT id, nombre, anio FROM materias
-        WHERE carrera_id = %s
-        ORDER BY anio, nombre;
-    """, (carrera_id,))
-    rows = cur.fetchall()
-    cur.close()
-    conn.close()
-    return rows
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT id, nombre, anio FROM materias
+                WHERE carrera_id = %s
+                ORDER BY anio, nombre;
+            """, (carrera_id,))
+            return cur.fetchall()
 
-def get_cursada(usuario_id, materia_id):
-    conn = get_connection()
-    cur = conn.cursor()
-    cur.execute("""
-        SELECT id, anio_cursada, cuatrimestre, modalidad, dias, horario, link,
-               profesor1, email_profesor1, profesor2, email_profesor2, turno
-        FROM cursadas
-        WHERE usuario_id = %s AND materia_id = %s
-        ORDER BY anio_cursada DESC
-        LIMIT 1;
-    """, (usuario_id, materia_id))
-    row = cur.fetchone()
-    cur.close()
-    conn.close()
-    return row
+@st.cache_data(ttl=60)
+def get_todas_cursadas(usuario_id):
+    """Trae todas las cursadas del usuario de una vez."""
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT materia_id, id, anio_cursada, cuatrimestre, modalidad, dias, horario, link,
+                       profesor1, email_profesor1, profesor2, email_profesor2, turno
+                FROM cursadas
+                WHERE usuario_id = %s
+                ORDER BY anio_cursada DESC;
+            """, (usuario_id,))
+            rows = cur.fetchall()
+    result = {}
+    for row in rows:
+        mid = row[0]
+        if mid not in result:
+            result[mid] = row[1:]
+    return result
+
+@st.cache_data(ttl=60)
+def get_clases_hoy(usuario_id):
+    hoy = datetime.now()
+    dia_semana = ["Lunes","Martes","Miércoles","Jueves","Viernes","Sábado","Domingo"][hoy.weekday()]
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT m.nombre, c.horario, c.link, c.modalidad
+                FROM cursadas c
+                JOIN materias m ON c.materia_id = m.id
+                JOIN alumno_materias am ON am.materia_id = m.id AND am.usuario_id = c.usuario_id
+                WHERE c.usuario_id = %s
+                AND am.estado = 'cursando'
+                AND c.dias ILIKE %s;
+            """, (usuario_id, f"%{dia_semana}%"))
+            return cur.fetchall()
+
+@st.cache_data(ttl=60)
+def get_todos_programas_cursada(usuario_id):
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT materia_id, link FROM programas WHERE usuario_id = %s;", (usuario_id,))
+            return {row[0]: row[1] for row in cur.fetchall()}
+
+@st.cache_data(ttl=60)
+def get_tareas_materia(usuario_id, materia_id):
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT id, numero, descripcion, fecha_vencimiento, completada
+                FROM tareas
+                WHERE usuario_id = %s AND materia_id = %s
+                ORDER BY numero;
+            """, (usuario_id, materia_id))
+            return cur.fetchall()
 
 def guardar_cursada(usuario_id, materia_id, anio, cuatrimestre, modalidad, turno, dias, horario, link, profesor1, email_profesor1, profesor2, email_profesor2):
-    conn = get_connection()
-    cur = conn.cursor()
-    cur.execute("""
-        INSERT INTO cursadas (usuario_id, materia_id, anio_cursada, cuatrimestre, modalidad, turno, dias, horario, link, profesor1, email_profesor1, profesor2, email_profesor2)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-        ON CONFLICT (usuario_id, materia_id, anio_cursada, cuatrimestre)
-        DO UPDATE SET modalidad = EXCLUDED.modalidad, turno = EXCLUDED.turno,
-                      dias = EXCLUDED.dias, horario = EXCLUDED.horario,
-                      link = EXCLUDED.link, profesor1 = EXCLUDED.profesor1,
-                      email_profesor1 = EXCLUDED.email_profesor1,
-                      profesor2 = EXCLUDED.profesor2,
-                      email_profesor2 = EXCLUDED.email_profesor2;
-    """, (usuario_id, materia_id, anio, cuatrimestre, modalidad, turno, dias, horario, link, profesor1, email_profesor1, profesor2, email_profesor2))
-    conn.commit()
-    cur.close()
-    conn.close()
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO cursadas (usuario_id, materia_id, anio_cursada, cuatrimestre, modalidad, turno, dias, horario, link, profesor1, email_profesor1, profesor2, email_profesor2)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (usuario_id, materia_id, anio_cursada, cuatrimestre)
+                DO UPDATE SET modalidad = EXCLUDED.modalidad, turno = EXCLUDED.turno,
+                              dias = EXCLUDED.dias, horario = EXCLUDED.horario,
+                              link = EXCLUDED.link, profesor1 = EXCLUDED.profesor1,
+                              email_profesor1 = EXCLUDED.email_profesor1,
+                              profesor2 = EXCLUDED.profesor2,
+                              email_profesor2 = EXCLUDED.email_profesor2;
+            """, (usuario_id, materia_id, anio, cuatrimestre, modalidad, turno, dias, horario, link, profesor1, email_profesor1, profesor2, email_profesor2))
+        conn.commit()
+    get_todas_cursadas.clear()
+    get_clases_hoy.clear()
 
 def borrar_cursada(usuario_id, materia_id):
-    conn = get_connection()
-    cur = conn.cursor()
-    cur.execute("DELETE FROM cursadas WHERE usuario_id = %s AND materia_id = %s;", (usuario_id, materia_id))
-    conn.commit()
-    cur.close()
-    conn.close()
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM cursadas WHERE usuario_id = %s AND materia_id = %s;", (usuario_id, materia_id))
+        conn.commit()
+    get_todas_cursadas.clear()
+    get_clases_hoy.clear()
 
-def get_programa(usuario_id, materia_id):
-    conn = get_connection()
-    cur = conn.cursor()
-    cur.execute("""
-        SELECT link FROM programas
-        WHERE usuario_id = %s AND materia_id = %s;
-    """, (usuario_id, materia_id))
-    row = cur.fetchone()
-    cur.close()
-    conn.close()
-    return row[0] if row else None
+def guardar_tarea(usuario_id, materia_id, numero, descripcion, fecha_vencimiento):
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO tareas (usuario_id, materia_id, numero, descripcion, fecha_vencimiento)
+                VALUES (%s, %s, %s, %s, %s);
+            """, (usuario_id, materia_id, numero, descripcion, fecha_vencimiento))
+        conn.commit()
+    get_tareas_materia.clear()
+
+def actualizar_tarea(tarea_id, descripcion, fecha_vencimiento, completada):
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                UPDATE tareas SET descripcion = %s, fecha_vencimiento = %s, completada = %s
+                WHERE id = %s;
+            """, (descripcion, fecha_vencimiento, completada, tarea_id))
+        conn.commit()
+    get_tareas_materia.clear()
+
+def borrar_tarea(tarea_id):
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM tareas WHERE id = %s;", (tarea_id,))
+        conn.commit()
+    get_tareas_materia.clear()
 
 def convertir_link_drive(link):
     if "drive.google.com" in link and "/file/d/" in link:
@@ -98,69 +149,6 @@ def convertir_link_drive(link):
         except:
             return None
     return None
-
-def get_tareas(usuario_id, materia_id):
-    conn = get_connection()
-    cur = conn.cursor()
-    cur.execute("""
-        SELECT id, numero, descripcion, fecha_vencimiento, completada
-        FROM tareas
-        WHERE usuario_id = %s AND materia_id = %s
-        ORDER BY numero;
-    """, (usuario_id, materia_id))
-    rows = cur.fetchall()
-    cur.close()
-    conn.close()
-    return rows
-
-def guardar_tarea(usuario_id, materia_id, numero, descripcion, fecha_vencimiento):
-    conn = get_connection()
-    cur = conn.cursor()
-    cur.execute("""
-        INSERT INTO tareas (usuario_id, materia_id, numero, descripcion, fecha_vencimiento)
-        VALUES (%s, %s, %s, %s, %s);
-    """, (usuario_id, materia_id, numero, descripcion, fecha_vencimiento))
-    conn.commit()
-    cur.close()
-    conn.close()
-
-def actualizar_tarea(tarea_id, descripcion, fecha_vencimiento, completada):
-    conn = get_connection()
-    cur = conn.cursor()
-    cur.execute("""
-        UPDATE tareas SET descripcion = %s, fecha_vencimiento = %s, completada = %s
-        WHERE id = %s;
-    """, (descripcion, fecha_vencimiento, completada, tarea_id))
-    conn.commit()
-    cur.close()
-    conn.close()
-
-def borrar_tarea(tarea_id):
-    conn = get_connection()
-    cur = conn.cursor()
-    cur.execute("DELETE FROM tareas WHERE id = %s;", (tarea_id,))
-    conn.commit()
-    cur.close()
-    conn.close()
-
-def get_clases_hoy(usuario_id):
-    hoy = datetime.now()
-    dia_semana = ["Lunes","Martes","Miércoles","Jueves","Viernes","Sábado","Domingo"][hoy.weekday()]
-    conn = get_connection()
-    cur = conn.cursor()
-    cur.execute("""
-        SELECT m.nombre, c.horario, c.link, c.modalidad
-        FROM cursadas c
-        JOIN materias m ON c.materia_id = m.id
-        JOIN alumno_materias am ON am.materia_id = m.id AND am.usuario_id = c.usuario_id
-        WHERE c.usuario_id = %s
-        AND am.estado = 'cursando'
-        AND c.dias ILIKE %s;
-    """, (usuario_id, f"%{dia_semana}%"))
-    rows = cur.fetchall()
-    cur.close()
-    conn.close()
-    return rows
 
 def mostrar(usuario):
     st.title("🗓️ Cursadas")
@@ -182,13 +170,17 @@ def mostrar(usuario):
 
     with tab1:
         materias_cursando = get_materias_cursando(usuario["id"], usuario["carrera_id"])
+        todas_cursadas = get_todas_cursadas(usuario["id"])
+        todos_programas = get_todos_programas_cursada(usuario["id"])
+
         if not materias_cursando:
             st.info("No tenés materias marcadas como 'cursando'. Cambiá el estado en Plan de Estudios.")
         else:
             for m in materias_cursando:
                 mid, mnombre, manio = m
-                cursada = get_cursada(usuario["id"], mid)
-                programa_link = get_programa(usuario["id"], mid)
+                cursada = todas_cursadas.get(mid)
+                programa_link = todos_programas.get(mid)
+
                 with st.expander(f"{nombres_anio.get(manio, '')} — {mnombre}"):
                     if cursada:
                         cid, anio, cuatri, modalidad, dias, horario, link, prof1, email_prof1, prof2, email_prof2, turno = cursada
@@ -212,7 +204,6 @@ def mostrar(usuario):
                         if link:
                             st.markdown(f"[🔗 Acceder a la clase]({link})")
 
-                        # Botón programa dentro de cursada
                         if programa_link:
                             st.markdown("---")
                             col_prog1, col_prog2 = st.columns(2)
@@ -322,7 +313,7 @@ def mostrar(usuario):
             materia_tarea_label = st.selectbox("Materia", list(opciones_tareas.keys()), key="sel_tarea")
             materia_tarea_id = opciones_tareas[materia_tarea_label]
 
-            tareas = get_tareas(usuario["id"], materia_tarea_id)
+            tareas = get_tareas_materia(usuario["id"], materia_tarea_id)
             tareas_dict = {t[1]: t for t in tareas}
             hoy = date.today()
 
@@ -375,5 +366,3 @@ def mostrar(usuario):
                                 guardar_tarea(usuario["id"], materia_tarea_id, num, desc, fecha)
                                 st.session_state[f"tarea_key_{num}"] += 1
                                 st.rerun()
-
-

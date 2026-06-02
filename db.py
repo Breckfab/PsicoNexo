@@ -3,6 +3,8 @@ import psycopg
 import bcrypt
 from dotenv import load_dotenv
 import streamlit as st
+from psycopg_pool import ConnectionPool
+from contextlib import contextmanager
 
 load_dotenv()
 
@@ -10,6 +12,26 @@ load_dotenv()
 def get_database_url():
     return os.environ["DATABASE_URL"]
 
+@st.cache_resource
+def get_pool():
+    """Pool de conexiones compartido. Se crea una sola vez por proceso."""
+    url = get_database_url()
+    pool = ConnectionPool(
+        conninfo=url,
+        min_size=1,
+        max_size=5,
+        open=True,
+    )
+    return pool
+
+@contextmanager
+def get_conn():
+    """Context manager para obtener una conexión del pool y devolverla automáticamente."""
+    pool = get_pool()
+    with pool.connection() as conn:
+        yield conn
+
+# Mantener compatibilidad con el código existente que llama get_connection()
 def get_connection():
     return psycopg.connect(get_database_url())
 

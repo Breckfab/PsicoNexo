@@ -1,90 +1,77 @@
 import streamlit as st
-from db import get_connection
+from db import get_conn
+from datetime import datetime, date
 
+@st.cache_data(ttl=60)
 def get_stats(usuario_id, carrera_id):
-    conn = get_connection()
-    cur = conn.cursor()
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT COUNT(*) FROM materias WHERE carrera_id = %s;", (carrera_id,))
+            total = cur.fetchone()[0]
 
-    cur.execute("""
-        SELECT COUNT(*) FROM materias WHERE carrera_id = %s;
-    """, (carrera_id,))
-    total = cur.fetchone()[0]
+            cur.execute("""
+                SELECT COUNT(*) FROM alumno_materias
+                WHERE usuario_id = %s AND estado IN ('aprobada', 'promocionada');
+            """, (usuario_id,))
+            aprobadas = cur.fetchone()[0]
 
-    cur.execute("""
-        SELECT COUNT(*) FROM alumno_materias
-        WHERE usuario_id = %s AND estado IN ('aprobada', 'promocionada');
-    """, (usuario_id,))
-    aprobadas = cur.fetchone()[0]
+            cur.execute("""
+                SELECT COUNT(*) FROM alumno_materias
+                WHERE usuario_id = %s AND estado = 'cursando';
+            """, (usuario_id,))
+            cursando = cur.fetchone()[0]
 
-    cur.execute("""
-        SELECT COUNT(*) FROM alumno_materias
-        WHERE usuario_id = %s AND estado = 'cursando';
-    """, (usuario_id,))
-    cursando = cur.fetchone()[0]
+            cur.execute("""
+                SELECT COUNT(*) FROM alumno_materias
+                WHERE usuario_id = %s AND estado = 'regular';
+            """, (usuario_id,))
+            regulares = cur.fetchone()[0]
 
-    cur.execute("""
-        SELECT COUNT(*) FROM alumno_materias
-        WHERE usuario_id = %s AND estado = 'regular';
-    """, (usuario_id,))
-    regulares = cur.fetchone()[0]
-
-    cur.execute("""
-        SELECT COUNT(*) FROM alumno_materias
-        WHERE usuario_id = %s AND estado = 'desaprobada';
-    """, (usuario_id,))
-    desaprobadas = cur.fetchone()[0]
-
-    cur.close()
-    conn.close()
+            cur.execute("""
+                SELECT COUNT(*) FROM alumno_materias
+                WHERE usuario_id = %s AND estado = 'desaprobada';
+            """, (usuario_id,))
+            desaprobadas = cur.fetchone()[0]
 
     avance = round((aprobadas / total) * 100, 1) if total > 0 else 0
     return total, aprobadas, cursando, regulares, desaprobadas, avance
 
+@st.cache_data(ttl=60)
 def get_clases_hoy(usuario_id):
-    from datetime import datetime
     hoy = datetime.now()
     dia_semana = ["Lunes","Martes","Miércoles","Jueves","Viernes","Sábado","Domingo"][hoy.weekday()]
-    conn = get_connection()
-    cur = conn.cursor()
-    cur.execute("""
-        SELECT m.nombre, c.horario, c.link, c.modalidad, c.turno
-        FROM cursadas c
-        JOIN materias m ON c.materia_id = m.id
-        JOIN alumno_materias am ON am.materia_id = m.id AND am.usuario_id = c.usuario_id
-        WHERE c.usuario_id = %s
-        AND am.estado = 'cursando'
-        AND c.dias ILIKE %s;
-    """, (usuario_id, f"%{dia_semana}%"))
-    rows = cur.fetchall()
-    cur.close()
-    conn.close()
-    return rows
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT m.nombre, c.horario, c.link, c.modalidad, c.turno
+                FROM cursadas c
+                JOIN materias m ON c.materia_id = m.id
+                JOIN alumno_materias am ON am.materia_id = m.id AND am.usuario_id = c.usuario_id
+                WHERE c.usuario_id = %s
+                AND am.estado = 'cursando'
+                AND c.dias ILIKE %s;
+            """, (usuario_id, f"%{dia_semana}%"))
+            return cur.fetchall()
 
+@st.cache_data(ttl=60)
 def get_tareas_pendientes(usuario_id):
-    from datetime import date
-    conn = get_connection()
-    cur = conn.cursor()
-    cur.execute("""
-        SELECT t.numero, t.descripcion, t.fecha_vencimiento, m.nombre
-        FROM tareas t
-        JOIN materias m ON t.materia_id = m.id
-        WHERE t.usuario_id = %s AND t.completada = FALSE
-        ORDER BY t.fecha_vencimiento ASC NULLS LAST;
-    """, (usuario_id,))
-    rows = cur.fetchall()
-    cur.close()
-    conn.close()
-    return rows
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT t.numero, t.descripcion, t.fecha_vencimiento, m.nombre
+                FROM tareas t
+                JOIN materias m ON t.materia_id = m.id
+                WHERE t.usuario_id = %s AND t.completada = FALSE
+                ORDER BY t.fecha_vencimiento ASC NULLS LAST;
+            """, (usuario_id,))
+            return cur.fetchall()
 
 def mostrar(usuario):
-    from datetime import date
-
     st.title("🧠 PsicoNexo")
     st.markdown(f"### Bienvenido/a, {usuario['nombre'].split()[0]} 👋")
 
     total, aprobadas, cursando, regulares, desaprobadas, avance = get_stats(usuario["id"], usuario["carrera_id"])
 
-    # Métricas
     col1, col2, col3, col4, col5 = st.columns(5)
     with col1:
         st.metric("✅ Aprobadas", aprobadas)
@@ -97,7 +84,6 @@ def mostrar(usuario):
     with col5:
         st.metric("🎯 Avance", f"{avance}%")
 
-    # Barra de progreso
     st.markdown("---")
     st.markdown(f"**Progreso de la carrera: {aprobadas} de {total} materias aprobadas**")
     st.progress(avance / 100)
@@ -106,7 +92,6 @@ def mostrar(usuario):
 
     col1, col2 = st.columns(2)
 
-    # Clases de hoy
     with col1:
         st.markdown("### 📅 Hoy")
         clases_hoy = get_clases_hoy(usuario["id"])
@@ -120,7 +105,6 @@ def mostrar(usuario):
         else:
             st.info("📭 Hoy no cursás ninguna materia.")
 
-    # Tareas pendientes
     with col2:
         st.markdown("### 📌 Tareas pendientes")
         tareas = get_tareas_pendientes(usuario["id"])

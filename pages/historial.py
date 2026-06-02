@@ -1,5 +1,5 @@
 import streamlit as st
-from db import get_connection
+from db import get_conn
 from io import BytesIO
 from reportlab.lib.pagesizes import A4
 from reportlab.lib import colors
@@ -8,36 +8,33 @@ from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, 
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.enums import TA_CENTER
 
+@st.cache_data(ttl=60)
 def get_historial(usuario_id, carrera_id):
-    conn = get_connection()
-    cur = conn.cursor()
-    cur.execute("""
-        SELECT m.nombre, m.anio, m.cuatrimestre, am.estado,
-               c.anio_cursada, c.cuatrimestre as cuatri_cursada, c.profesor1,
-               AVG(e.nota) as promedio
-        FROM materias m
-        LEFT JOIN alumno_materias am ON m.id = am.materia_id AND am.usuario_id = %s
-        LEFT JOIN cursadas c ON m.id = c.materia_id AND c.usuario_id = %s
-        LEFT JOIN evaluaciones e ON m.id = e.materia_id AND e.usuario_id = %s
-        WHERE m.carrera_id = %s
-        AND am.estado IS NOT NULL
-        AND am.estado != 'pendiente'
-        GROUP BY m.nombre, m.anio, m.cuatrimestre, am.estado,
-                 c.anio_cursada, c.cuatrimestre, c.profesor1
-        ORDER BY m.anio, m.cuatrimestre, m.nombre;
-    """, (usuario_id, usuario_id, usuario_id, carrera_id))
-    rows = cur.fetchall()
-    cur.close()
-    conn.close()
-    return rows
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT m.nombre, m.anio, m.cuatrimestre, am.estado,
+                       c.anio_cursada, c.cuatrimestre as cuatri_cursada, c.profesor1,
+                       AVG(e.nota) as promedio
+                FROM materias m
+                LEFT JOIN alumno_materias am ON m.id = am.materia_id AND am.usuario_id = %s
+                LEFT JOIN cursadas c ON m.id = c.materia_id AND c.usuario_id = %s
+                LEFT JOIN evaluaciones e ON m.id = e.materia_id AND e.usuario_id = %s
+                WHERE m.carrera_id = %s
+                AND am.estado IS NOT NULL
+                AND am.estado != 'pendiente'
+                GROUP BY m.nombre, m.anio, m.cuatrimestre, am.estado,
+                         c.anio_cursada, c.cuatrimestre, c.profesor1
+                ORDER BY m.anio, m.cuatrimestre, m.nombre;
+            """, (usuario_id, usuario_id, usuario_id, carrera_id))
+            return cur.fetchall()
 
+@st.cache_data(ttl=300)
 def get_nombre_usuario(usuario_id):
-    conn = get_connection()
-    cur = conn.cursor()
-    cur.execute("SELECT nombre FROM usuarios WHERE id = %s;", (usuario_id,))
-    row = cur.fetchone()
-    cur.close()
-    conn.close()
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT nombre FROM usuarios WHERE id = %s;", (usuario_id,))
+            row = cur.fetchone()
     return row[0] if row else "Alumno"
 
 CUATRI_TEXTO = {
@@ -88,7 +85,6 @@ def generar_pdf(historial, nombre_alumno, filtros):
     nombres_anio = {1: "1° Año", 2: "2° Año", 3: "3° Año", 4: "4° Año", 5: "5° Año"}
 
     elementos = []
-
     elementos.append(Paragraph("🧠 PsicoNexo", titulo_style))
     elementos.append(Paragraph("Historial Académico", subtitulo_style))
     elementos.append(Paragraph("Licenciatura en Psicología — UdeMM", subtitulo_style))
@@ -114,8 +110,6 @@ def generar_pdf(historial, nombre_alumno, filtros):
     for h in historial:
         mnombre, manio, mcuatri, estado, anio_cursada, cuatri_cursada, profesor1, promedio = h
         anio_texto = nombres_anio.get(manio, f"Año {manio}")
-
-        # Cursada: año + cuatrimestre
         if anio_cursada and cuatri_cursada:
             cuatri_corto = CUATRI_TEXTO.get(cuatri_cursada, cuatri_cursada)
             cursada_texto = f"{anio_cursada} · {cuatri_corto}"
@@ -123,15 +117,8 @@ def generar_pdf(historial, nombre_alumno, filtros):
             cursada_texto = str(anio_cursada)
         else:
             cursada_texto = "—"
-
         promedio_texto = f"{float(promedio):.2f}" if promedio is not None else "—"
-        datos.append([
-            mnombre,
-            anio_texto,
-            estado.capitalize(),
-            cursada_texto,
-            promedio_texto,
-        ])
+        datos.append([mnombre, anio_texto, estado.capitalize(), cursada_texto, promedio_texto])
 
     tabla = Table(datos, colWidths=[6.5*cm, 2.5*cm, 3*cm, 3.5*cm, 2*cm])
     tabla.setStyle(TableStyle([
@@ -221,7 +208,6 @@ def mostrar(usuario):
 
     for h in resultado:
         mnombre, manio, mcuatri, estado, anio_cursada, cuatri_cursada, profesor1, promedio = h
-
         icono = COLORES.get(estado, "⬜")
         anio_texto = nombres_anio.get(manio, f"Año {manio}")
         cuatri_texto = CUATRI_TEXTO.get(mcuatri, mcuatri)

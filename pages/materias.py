@@ -1,5 +1,5 @@
 import streamlit as st
-from db import get_connection
+from db import get_conn
 
 ESTADOS = ["pendiente", "cursando", "regular", "promocionada", "aprobada", "desaprobada"]
 
@@ -12,87 +12,84 @@ COLORES = {
     "desaprobada": "🔴",
 }
 
+@st.cache_data(ttl=60)
 def get_materias_con_estado(usuario_id, carrera_id):
-    conn = get_connection()
-    cur = conn.cursor()
-    cur.execute("""
-        SELECT m.id, m.codigo, m.nombre, m.anio, m.cuatrimestre,
-               m.final_obligatorio, m.es_electiva,
-               COALESCE(am.estado, 'pendiente') as estado
-        FROM materias m
-        LEFT JOIN alumno_materias am
-            ON m.id = am.materia_id AND am.usuario_id = %s
-        WHERE m.carrera_id = %s
-        ORDER BY m.anio, m.cuatrimestre, m.nombre;
-    """, (usuario_id, carrera_id))
-    rows = cur.fetchall()
-    cur.close()
-    conn.close()
-    return rows
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT m.id, m.codigo, m.nombre, m.anio, m.cuatrimestre,
+                       m.final_obligatorio, m.es_electiva,
+                       COALESCE(am.estado, 'pendiente') as estado
+                FROM materias m
+                LEFT JOIN alumno_materias am
+                    ON m.id = am.materia_id AND am.usuario_id = %s
+                WHERE m.carrera_id = %s
+                ORDER BY m.anio, m.cuatrimestre, m.nombre;
+            """, (usuario_id, carrera_id))
+            return cur.fetchall()
 
-def get_correlatividades(materia_id, usuario_id):
-    conn = get_connection()
-    cur = conn.cursor()
-    cur.execute("""
-        SELECT m.nombre, COALESCE(am.estado, 'pendiente') as estado
-        FROM correlatividades c
-        JOIN materias m ON c.requiere_materia_id = m.id
-        LEFT JOIN alumno_materias am ON am.materia_id = m.id AND am.usuario_id = %s
-        WHERE c.materia_id = %s
-        ORDER BY m.anio, m.nombre;
-    """, (usuario_id, materia_id))
-    rows = cur.fetchall()
-    cur.close()
-    conn.close()
-    return rows
+@st.cache_data(ttl=120)
+def get_todas_correlatividades(carrera_id, usuario_id):
+    """Trae TODAS las correlatividades de la carrera en una sola query."""
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT c.materia_id, m.nombre, COALESCE(am.estado, 'pendiente') as estado
+                FROM correlatividades c
+                JOIN materias m ON c.requiere_materia_id = m.id
+                LEFT JOIN alumno_materias am ON am.materia_id = m.id AND am.usuario_id = %s
+                WHERE m.carrera_id = %s
+                ORDER BY m.anio, m.nombre;
+            """, (usuario_id, carrera_id))
+            rows = cur.fetchall()
+    result = {}
+    for materia_id, nombre, estado in rows:
+        result.setdefault(materia_id, []).append((nombre, estado))
+    return result
+
+@st.cache_data(ttl=60)
+def get_todos_programas(usuario_id):
+    """Trae todos los programas del usuario en una sola query."""
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT materia_id, id, link FROM programas WHERE usuario_id = %s;
+            """, (usuario_id,))
+            rows = cur.fetchall()
+    return {materia_id: (pid, link) for materia_id, pid, link in rows}
 
 def actualizar_estado(usuario_id, materia_id, nuevo_estado):
-    conn = get_connection()
-    cur = conn.cursor()
-    cur.execute("""
-        INSERT INTO alumno_materias (usuario_id, materia_id, estado)
-        VALUES (%s, %s, %s)
-        ON CONFLICT (usuario_id, materia_id)
-        DO UPDATE SET estado = EXCLUDED.estado;
-    """, (usuario_id, materia_id, nuevo_estado))
-    conn.commit()
-    cur.close()
-    conn.close()
-
-def get_programa(usuario_id, materia_id):
-    conn = get_connection()
-    cur = conn.cursor()
-    cur.execute("""
-        SELECT id, link FROM programas
-        WHERE usuario_id = %s AND materia_id = %s;
-    """, (usuario_id, materia_id))
-    row = cur.fetchone()
-    cur.close()
-    conn.close()
-    return row
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO alumno_materias (usuario_id, materia_id, estado)
+                VALUES (%s, %s, %s)
+                ON CONFLICT (usuario_id, materia_id)
+                DO UPDATE SET estado = EXCLUDED.estado;
+            """, (usuario_id, materia_id, nuevo_estado))
+        conn.commit()
+    get_materias_con_estado.clear()
 
 def guardar_programa(usuario_id, materia_id, link):
-    conn = get_connection()
-    cur = conn.cursor()
-    cur.execute("""
-        INSERT INTO programas (usuario_id, materia_id, link)
-        VALUES (%s, %s, %s)
-        ON CONFLICT (usuario_id, materia_id)
-        DO UPDATE SET link = EXCLUDED.link;
-    """, (usuario_id, materia_id, link))
-    conn.commit()
-    cur.close()
-    conn.close()
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO programas (usuario_id, materia_id, link)
+                VALUES (%s, %s, %s)
+                ON CONFLICT (usuario_id, materia_id)
+                DO UPDATE SET link = EXCLUDED.link;
+            """, (usuario_id, materia_id, link))
+        conn.commit()
+    get_todos_programas.clear()
 
 def borrar_programa(usuario_id, materia_id):
-    conn = get_connection()
-    cur = conn.cursor()
-    cur.execute("""
-        DELETE FROM programas WHERE usuario_id = %s AND materia_id = %s;
-    """, (usuario_id, materia_id))
-    conn.commit()
-    cur.close()
-    conn.close()
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                DELETE FROM programas WHERE usuario_id = %s AND materia_id = %s;
+            """, (usuario_id, materia_id))
+        conn.commit()
+    get_todos_programas.clear()
 
 def convertir_link_preview(link):
     if "drive.google.com" in link and "/file/d/" in link:
@@ -113,7 +110,10 @@ def mostrar(usuario):
     st.title("📋 Plan de Estudios")
     st.caption("Licenciatura en Psicología — UdeMM")
 
+    # Una sola pasada a la DB para todo
     materias = get_materias_con_estado(usuario["id"], usuario["carrera_id"])
+    correlatividades_map = get_todas_correlatividades(usuario["carrera_id"], usuario["id"])
+    programas_map = get_todos_programas(usuario["id"])
 
     if not materias:
         st.warning("No se encontraron materias para tu carrera.")
@@ -142,7 +142,7 @@ def mostrar(usuario):
         for m in lista:
             mid, codigo, nombre, _, cuatri, final_oblig, es_electiva, estado = m
 
-            programa = get_programa(usuario["id"], mid)
+            programa = programas_map.get(mid)
 
             col1, col2, col3 = st.columns([3, 1, 1])
             with col1:
@@ -178,8 +178,8 @@ def mostrar(usuario):
                         st.session_state[f"cargando_programa_{mid}"] = True
                         st.rerun()
 
-            # Correlatividades
-            correlativas = get_correlatividades(mid, usuario["id"])
+            # Correlatividades — sin query extra por materia
+            correlativas = correlatividades_map.get(mid, [])
             if correlativas:
                 with st.expander(f"📎 Correlativas ({len(correlativas)})", expanded=False):
                     for cnombre, cestado in correlativas:

@@ -1,54 +1,48 @@
 import streamlit as st
-from db import get_connection
+from db import get_conn
 
 VALORACIONES = ["Recomendado", "No recomendado"]
 
+@st.cache_data(ttl=60)
 def get_todas_materias(carrera_id):
-    conn = get_connection()
-    cur = conn.cursor()
-    cur.execute("""
-        SELECT id, nombre, anio FROM materias
-        WHERE carrera_id = %s
-        ORDER BY anio, nombre;
-    """, (carrera_id,))
-    rows = cur.fetchall()
-    cur.close()
-    conn.close()
-    return rows
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT id, nombre, anio FROM materias
+                WHERE carrera_id = %s
+                ORDER BY anio, nombre;
+            """, (carrera_id,))
+            return cur.fetchall()
 
+@st.cache_data(ttl=60)
 def get_opiniones(usuario_id):
-    conn = get_connection()
-    cur = conn.cursor()
-    cur.execute("""
-        SELECT op.id, op.profesor, op.valoracion, op.observaciones, m.nombre, m.anio
-        FROM opiniones_profesores op
-        JOIN materias m ON op.materia_id = m.id
-        WHERE op.usuario_id = %s
-        ORDER BY op.profesor, m.anio, m.nombre;
-    """, (usuario_id,))
-    rows = cur.fetchall()
-    cur.close()
-    conn.close()
-    return rows
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT op.id, op.profesor, op.valoracion, op.observaciones, m.nombre, m.anio
+                FROM opiniones_profesores op
+                JOIN materias m ON op.materia_id = m.id
+                WHERE op.usuario_id = %s
+                ORDER BY op.profesor, m.anio, m.nombre;
+            """, (usuario_id,))
+            return cur.fetchall()
 
 def agregar_opinion(usuario_id, materia_id, profesor, valoracion, observaciones):
-    conn = get_connection()
-    cur = conn.cursor()
-    cur.execute("""
-        INSERT INTO opiniones_profesores (usuario_id, materia_id, profesor, valoracion, observaciones)
-        VALUES (%s, %s, %s, %s, %s);
-    """, (usuario_id, materia_id, profesor, valoracion, observaciones))
-    conn.commit()
-    cur.close()
-    conn.close()
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO opiniones_profesores (usuario_id, materia_id, profesor, valoracion, observaciones)
+                VALUES (%s, %s, %s, %s, %s);
+            """, (usuario_id, materia_id, profesor, valoracion, observaciones))
+        conn.commit()
+    get_opiniones.clear()
 
 def eliminar_opinion(opinion_id):
-    conn = get_connection()
-    cur = conn.cursor()
-    cur.execute("DELETE FROM opiniones_profesores WHERE id = %s;", (opinion_id,))
-    conn.commit()
-    cur.close()
-    conn.close()
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM opiniones_profesores WHERE id = %s;", (opinion_id,))
+        conn.commit()
+    get_opiniones.clear()
 
 def mostrar(usuario):
     st.title("⭐ Opiniones de Profesores")

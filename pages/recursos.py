@@ -1,53 +1,47 @@
 import streamlit as st
-from db import get_connection
+from db import get_conn
 
 TIPOS = ["Bibliografía", "Apunte", "NotebookLM", "Otro"]
 
-def get_materias_alumno(usuario_id, carrera_id):
-    conn = get_connection()
-    cur = conn.cursor()
-    cur.execute("""
-        SELECT id, nombre, anio FROM materias
-        WHERE carrera_id = %s
-        ORDER BY anio, nombre;
-    """, (carrera_id,))
-    rows = cur.fetchall()
-    cur.close()
-    conn.close()
-    return rows
+@st.cache_data(ttl=60)
+def get_materias_alumno(carrera_id):
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT id, nombre, anio FROM materias
+                WHERE carrera_id = %s
+                ORDER BY anio, nombre;
+            """, (carrera_id,))
+            return cur.fetchall()
 
+@st.cache_data(ttl=60)
 def get_recursos(usuario_id, materia_id):
-    conn = get_connection()
-    cur = conn.cursor()
-    cur.execute("""
-        SELECT id, nombre, tipo, link
-        FROM recursos
-        WHERE usuario_id = %s AND materia_id = %s
-        ORDER BY tipo, nombre;
-    """, (usuario_id, materia_id))
-    rows = cur.fetchall()
-    cur.close()
-    conn.close()
-    return rows
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT id, nombre, tipo, link
+                FROM recursos
+                WHERE usuario_id = %s AND materia_id = %s
+                ORDER BY tipo, nombre;
+            """, (usuario_id, materia_id))
+            return cur.fetchall()
 
 def agregar_recurso(usuario_id, materia_id, nombre, tipo, link):
-    conn = get_connection()
-    cur = conn.cursor()
-    cur.execute("""
-        INSERT INTO recursos (usuario_id, materia_id, nombre, tipo, link)
-        VALUES (%s, %s, %s, %s, %s);
-    """, (usuario_id, materia_id, nombre, tipo, link))
-    conn.commit()
-    cur.close()
-    conn.close()
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO recursos (usuario_id, materia_id, nombre, tipo, link)
+                VALUES (%s, %s, %s, %s, %s);
+            """, (usuario_id, materia_id, nombre, tipo, link))
+        conn.commit()
+    get_recursos.clear()
 
 def eliminar_recurso(recurso_id):
-    conn = get_connection()
-    cur = conn.cursor()
-    cur.execute("DELETE FROM recursos WHERE id = %s;", (recurso_id,))
-    conn.commit()
-    cur.close()
-    conn.close()
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM recursos WHERE id = %s;", (recurso_id,))
+        conn.commit()
+    get_recursos.clear()
 
 def convertir_link_preview(link):
     if "drive.google.com" in link and "/file/d/" in link:
@@ -67,7 +61,7 @@ def convertir_link_preview(link):
 def mostrar(usuario):
     st.title("📂 Recursos por Materia")
 
-    materias = get_materias_alumno(usuario["id"], usuario["carrera_id"])
+    materias = get_materias_alumno(usuario["carrera_id"])
     if not materias:
         st.warning("No hay materias disponibles.")
         return
@@ -75,7 +69,13 @@ def mostrar(usuario):
     nombres_anio = {1: "1° Año", 2: "2° Año", 3: "3° Año", 4: "4° Año", 5: "5° Año"}
     opciones = {f"{nombres_anio.get(m[2], '')} — {m[1]}": m[0] for m in materias}
 
-    materia_label = st.selectbox("Seleccioná una materia", list(opciones.keys()))
+    opciones_lista = ["Elegí una materia"] + list(opciones.keys())
+    materia_label = st.selectbox("Seleccioná una materia", opciones_lista, index=0)
+
+    if materia_label == "Elegí una materia":
+        st.info("Seleccioná una materia para ver sus recursos.")
+        return
+
     materia_id = opciones[materia_label]
 
     st.markdown("---")

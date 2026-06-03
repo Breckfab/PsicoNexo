@@ -52,7 +52,13 @@ def mostrar(usuario):
     todas = get_todas_materias(usuario["carrera_id"])
     opciones = {f"{nombres_anio.get(m[2], '')} — {m[1]}": (m[0], m[3]) for m in todas}
 
-    materia_label = st.selectbox("Seleccioná una materia", list(opciones.keys()))
+    opciones_lista = ["Elegí una materia"] + list(opciones.keys())
+    materia_label = st.selectbox("Seleccioná una materia", opciones_lista, index=0)
+
+    if materia_label == "Elegí una materia":
+        st.info("Seleccioná una materia para ver sus notas.")
+        return
+
     materia_id, final_obligatorio = opciones[materia_label]
 
     st.markdown("---")

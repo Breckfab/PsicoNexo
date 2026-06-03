@@ -8,6 +8,15 @@ from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, 
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.enums import TA_CENTER
 
+CUATRI_TEXTO = {
+    "1": "1 Cuat.",
+    "2": "2 Cuat.",
+    "anual": "Anual",
+    "1 Cuatrimestre": "1 Cuat.",
+    "2 Cuatrimestre": "2 Cuat.",
+    "Anual": "Anual",
+}
+
 @st.cache_data(ttl=60)
 def get_historial(usuario_id, carrera_id):
     with get_conn() as conn:
@@ -41,15 +50,6 @@ def get_nombre_usuario(usuario_id):
             cur.execute("SELECT nombre FROM usuarios WHERE id = %s;", (usuario_id,))
             row = cur.fetchone()
     return row[0] if row else "Alumno"
-
-CUATRI_TEXTO = {
-    "1": "1° Cuat.",
-    "2": "2° Cuat.",
-    "anual": "Anual",
-    "1° Cuatrimestre": "1° Cuat.",
-    "2° Cuatrimestre": "2° Cuat.",
-    "Anual": "Anual",
-}
 
 def generar_pdf(historial, nombre_alumno, filtros):
     buffer = BytesIO()
@@ -87,42 +87,42 @@ def generar_pdf(historial, nombre_alumno, filtros):
         spaceAfter=2
     )
 
-    nombres_anio = {1: "1° Año", 2: "2° Año", 3: "3° Año", 4: "4° Año", 5: "5° Año"}
+    nombres_anio = {1: "1 Anio", 2: "2 Anio", 3: "3 Anio", 4: "4 Anio", 5: "5 Anio"}
 
     elementos = []
-    elementos.append(Paragraph("🧠 PsicoNexo", titulo_style))
-    elementos.append(Paragraph("Historial Académico", subtitulo_style))
-    elementos.append(Paragraph("Licenciatura en Psicología — UdeMM", subtitulo_style))
+    elementos.append(Paragraph("PsicoNexo", titulo_style))
+    elementos.append(Paragraph("Historial Academico", subtitulo_style))
+    elementos.append(Paragraph("Licenciatura en Psicologia - UdeMM", subtitulo_style))
     elementos.append(Spacer(1, 0.3*cm))
-    elementos.append(Paragraph(f"Alumno/a: {nombre_alumno}", info_style))
+    elementos.append(Paragraph("Alumno/a: " + nombre_alumno, info_style))
 
     filtros_texto = []
     if filtros.get("estado") != "Todos":
-        filtros_texto.append(f"Estado: {filtros['estado']}")
+        filtros_texto.append("Estado: " + filtros["estado"])
     if filtros.get("anio") != "Todos":
-        filtros_texto.append(f"Año: {filtros['anio']}")
+        filtros_texto.append("Anio: " + filtros["anio"])
     if filtros.get("cuatri") != "Todos":
-        filtros_texto.append(f"Cuatrimestre: {filtros['cuatri']}")
+        filtros_texto.append("Cuatrimestre: " + filtros["cuatri"])
     if filtros_texto:
-        elementos.append(Paragraph(f"Filtros aplicados: {' · '.join(filtros_texto)}", info_style))
+        elementos.append(Paragraph("Filtros aplicados: " + " - ".join(filtros_texto), info_style))
 
-    elementos.append(Paragraph(f"Total de materias: {len(historial)}", info_style))
+    elementos.append(Paragraph("Total de materias: " + str(len(historial)), info_style))
     elementos.append(Spacer(1, 0.5*cm))
 
-    encabezado = ["Materia", "Año", "Estado", "Cursada", "Promedio"]
+    encabezado = ["Materia", "Anio", "Estado", "Cursada", "Promedio"]
     datos = [encabezado]
 
     for h in historial:
         mnombre, manio, mcuatri, estado, anio_cursada, cuatri_cursada, profesor1, promedio = h
-        anio_texto = nombres_anio.get(manio, f"Año {manio}")
+        anio_texto = nombres_anio.get(manio, "Anio " + str(manio))
         if anio_cursada and cuatri_cursada:
             cuatri_corto = CUATRI_TEXTO.get(cuatri_cursada, cuatri_cursada)
-            cursada_texto = f"{anio_cursada} · {cuatri_corto}"
+            cursada_texto = str(anio_cursada) + " - " + cuatri_corto
         elif anio_cursada:
             cursada_texto = str(anio_cursada)
         else:
-            cursada_texto = "—"
-        promedio_texto = f"{float(promedio):.2f}" if promedio is not None else "—"
+            cursada_texto = "-"
+        promedio_texto = "{:.2f}".format(float(promedio)) if promedio is not None else "-"
         datos.append([mnombre, anio_texto, estado.capitalize(), cursada_texto, promedio_texto])
 
     tabla = Table(datos, colWidths=[6.5*cm, 2.5*cm, 3*cm, 3.5*cm, 2*cm])
@@ -150,14 +150,16 @@ def generar_pdf(historial, nombre_alumno, filtros):
     return buffer
 
 def mostrar(usuario):
-    st.title("📜 Historial Académico")
-    st.caption("Licenciatura en Psicología — UdeMM")
+    st.title("Historial Academico")
+    st.caption("Licenciatura en Psicologia - UdeMM")
 
     historial = get_historial(usuario["id"], usuario["carrera_id"])
 
     if not historial:
-        st.info("Todavía no tenés materias con estado registrado.")
+        st.info("Todavia no tenes materias con estado registrado.")
         return
+
+    nombres_anio = {1: "1 Anio", 2: "2 Anio", 3: "3 Anio", 4: "4 Anio", 5: "5 Anio"}
 
     col1, col2, col3 = st.columns(3)
     with col1:
@@ -165,9 +167,8 @@ def mostrar(usuario):
         filtro_estado = st.selectbox("Filtrar por estado", ["Todos"] + estados_disponibles)
     with col2:
         anios_disponibles = sorted(set(h[1] for h in historial))
-        nombres_anio = {1: "1° Año", 2: "2° Año", 3: "3° Año", 4: "4° Año", 5: "5° Año"}
         anios_opciones = ["Todos"] + [nombres_anio.get(a, str(a)) for a in anios_disponibles]
-        filtro_anio = st.selectbox("Filtrar por año de la carrera", anios_opciones)
+        filtro_anio = st.selectbox("Filtrar por anio de la carrera", anios_opciones)
     with col3:
         cuatris_disponibles = sorted(set(h[2] for h in historial if h[2]))
         filtro_cuatri = st.selectbox("Filtrar por cuatrimestre", ["Todos"] + cuatris_disponibles)
@@ -190,13 +191,14 @@ def mostrar(usuario):
 
     col_count, col_pdf = st.columns([3, 1])
     with col_count:
-        st.markdown(f"**{len(resultado)} materia{'s' if len(resultado) > 1 else ''} encontrada{'s' if len(resultado) > 1 else ''}**")
+        cant = len(resultado)
+        st.markdown("**" + str(cant) + " materia" + ("s" if cant > 1 else "") + " encontrada" + ("s" if cant > 1 else "") + "**")
     with col_pdf:
         nombre_alumno = get_nombre_usuario(usuario["id"])
         filtros = {"estado": filtro_estado, "anio": filtro_anio, "cuatri": filtro_cuatri}
         pdf_buffer = generar_pdf(resultado, nombre_alumno, filtros)
         st.download_button(
-            label="⬇️ Descargar PDF",
+            label="Descargar PDF",
             data=pdf_buffer,
             file_name="historial_academico.pdf",
             mime="application/pdf",
@@ -214,16 +216,35 @@ def mostrar(usuario):
     for h in resultado:
         mnombre, manio, mcuatri, estado, anio_cursada, cuatri_cursada, profesor1, promedio = h
         icono = COLORES.get(estado, "⬜")
-        anio_texto = nombres_anio.get(manio, f"Año {manio}")
+        anio_texto = nombres_anio.get(manio, "Anio " + str(manio))
         cuatri_texto = CUATRI_TEXTO.get(mcuatri, mcuatri)
 
         col1, col2, col3, col4 = st.columns([3, 1, 1, 1])
         with col1:
-            st.markdown(f"{icono} **{mnombre}**")
-            st.caption(f"{anio_texto} · {cuatri_texto}")
+            st.markdown(icono + " **" + mnombre + "**")
+            st.caption(anio_texto + " - " + cuatri_texto)
         with col2:
-            st.markdown(f"**Estado**")
-            st.markdown(f"{estado.capitalize()}")
+            st.markdown("**Estado**")
+            st.markdown(estado.capitalize())
         with col3:
-            st.markdown(f"**Cursada**")
-            if anio_curs
+            st.markdown("**Cursada**")
+            if anio_cursada and cuatri_cursada:
+                cuatri_corto = CUATRI_TEXTO.get(cuatri_cursada, cuatri_cursada)
+                st.markdown(str(anio_cursada) + " - " + cuatri_corto)
+            elif anio_cursada:
+                st.markdown(str(anio_cursada))
+            else:
+                st.markdown("-")
+        with col4:
+            st.markdown("**Promedio**")
+            if promedio is not None:
+                color = "#2ecc71" if promedio >= 6 else "#e74c3c"
+                st.markdown(
+                    "<span style='color:" + color + "; font-weight:bold;'>" +
+                    "{:.2f}".format(float(promedio)) + "</span>",
+                    unsafe_allow_html=True
+                )
+            else:
+                st.markdown("-")
+
+        st.markdown("---")

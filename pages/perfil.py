@@ -1,29 +1,26 @@
 import streamlit as st
-from db import get_connection
+from db import get_conn
 
+@st.cache_data(ttl=300)
 def get_perfil(usuario_id):
-    conn = get_connection()
-    cur = conn.cursor()
-    cur.execute("""
-        SELECT nombre, email, email_institucional, campus_virtual, portal_alumnos, biblioteca_digital
-        FROM usuarios WHERE id = %s;
-    """, (usuario_id,))
-    row = cur.fetchone()
-    cur.close()
-    conn.close()
-    return row
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT nombre, email, email_institucional, campus_virtual, portal_alumnos, biblioteca_digital
+                FROM usuarios WHERE id = %s;
+            """, (usuario_id,))
+            return cur.fetchone()
 
 def guardar_perfil(usuario_id, email_institucional, campus_virtual, portal_alumnos, biblioteca_digital):
-    conn = get_connection()
-    cur = conn.cursor()
-    cur.execute("""
-        UPDATE usuarios SET email_institucional = %s, campus_virtual = %s,
-        portal_alumnos = %s, biblioteca_digital = %s
-        WHERE id = %s;
-    """, (email_institucional, campus_virtual, portal_alumnos, biblioteca_digital, usuario_id))
-    conn.commit()
-    cur.close()
-    conn.close()
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                UPDATE usuarios SET email_institucional = %s, campus_virtual = %s,
+                portal_alumnos = %s, biblioteca_digital = %s
+                WHERE id = %s;
+            """, (email_institucional, campus_virtual, portal_alumnos, biblioteca_digital, usuario_id))
+        conn.commit()
+    get_perfil.clear()
 
 def mostrar(usuario):
     st.title("👤 Mi Perfil")

@@ -6,33 +6,24 @@ from datetime import datetime, date
 def get_stats(usuario_id, carrera_id):
     with get_conn() as conn:
         with conn.cursor() as cur:
-            cur.execute("SELECT COUNT(*) FROM materias WHERE carrera_id = %s;", (carrera_id,))
-            total = cur.fetchone()[0]
-
             cur.execute("""
-                SELECT COUNT(*) FROM alumno_materias
-                WHERE usuario_id = %s AND estado IN ('aprobada', 'promocionada');
-            """, (usuario_id,))
-            aprobadas = cur.fetchone()[0]
+                SELECT
+                    (SELECT COUNT(*) FROM materias WHERE carrera_id = %s) AS total,
+                    COUNT(*) FILTER (WHERE am.estado IN ('aprobada', 'promocionada')) AS aprobadas,
+                    COUNT(*) FILTER (WHERE am.estado = 'cursando') AS cursando,
+                    COUNT(*) FILTER (WHERE am.estado = 'regular') AS regulares,
+                    COUNT(*) FILTER (WHERE am.estado = 'desaprobada') AS desaprobadas
+                FROM alumno_materias am
+                WHERE am.usuario_id = %s;
+            """, (carrera_id, usuario_id))
+            row = cur.fetchone()
 
-            cur.execute("""
-                SELECT COUNT(*) FROM alumno_materias
-                WHERE usuario_id = %s AND estado = 'cursando';
-            """, (usuario_id,))
-            cursando = cur.fetchone()[0]
-
-            cur.execute("""
-                SELECT COUNT(*) FROM alumno_materias
-                WHERE usuario_id = %s AND estado = 'regular';
-            """, (usuario_id,))
-            regulares = cur.fetchone()[0]
-
-            cur.execute("""
-                SELECT COUNT(*) FROM alumno_materias
-                WHERE usuario_id = %s AND estado = 'desaprobada';
-            """, (usuario_id,))
-            desaprobadas = cur.fetchone()[0]
-
+    total, aprobadas, cursando, regulares, desaprobadas = row
+    total = total or 0
+    aprobadas = aprobadas or 0
+    cursando = cursando or 0
+    regulares = regulares or 0
+    desaprobadas = desaprobadas or 0
     avance = round((aprobadas / total) * 100, 1) if total > 0 else 0
     return total, aprobadas, cursando, regulares, desaprobadas, avance
 

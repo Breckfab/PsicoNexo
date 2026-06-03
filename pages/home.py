@@ -6,33 +6,25 @@ from datetime import datetime, date
 def get_stats(usuario_id, carrera_id):
     with get_conn() as conn:
         with conn.cursor() as cur:
-            cur.execute("SELECT COUNT(*) FROM materias WHERE carrera_id = %s;", (carrera_id,))
-            total = cur.fetchone()[0]
-
             cur.execute("""
-                SELECT COUNT(*) FROM alumno_materias
-                WHERE usuario_id = %s AND estado IN ('aprobada', 'promocionada');
-            """, (usuario_id,))
-            aprobadas = cur.fetchone()[0]
+                WITH conteos AS (
+                    SELECT
+                        COUNT(*) FILTER (WHERE estado IN ('aprobada', 'promocionada')) AS aprobadas,
+                        COUNT(*) FILTER (WHERE estado = 'cursando')                    AS cursando,
+                        COUNT(*) FILTER (WHERE estado = 'regular')                     AS regulares,
+                        COUNT(*) FILTER (WHERE estado = 'desaprobada')                 AS desaprobadas
+                    FROM alumno_materias
+                    WHERE usuario_id = %s
+                ),
+                total AS (
+                    SELECT COUNT(*) AS total FROM materias WHERE carrera_id = %s
+                )
+                SELECT t.total, c.aprobadas, c.cursando, c.regulares, c.desaprobadas
+                FROM total t, conteos c;
+            """, (usuario_id, carrera_id))
+            row = cur.fetchone()
 
-            cur.execute("""
-                SELECT COUNT(*) FROM alumno_materias
-                WHERE usuario_id = %s AND estado = 'cursando';
-            """, (usuario_id,))
-            cursando = cur.fetchone()[0]
-
-            cur.execute("""
-                SELECT COUNT(*) FROM alumno_materias
-                WHERE usuario_id = %s AND estado = 'regular';
-            """, (usuario_id,))
-            regulares = cur.fetchone()[0]
-
-            cur.execute("""
-                SELECT COUNT(*) FROM alumno_materias
-                WHERE usuario_id = %s AND estado = 'desaprobada';
-            """, (usuario_id,))
-            desaprobadas = cur.fetchone()[0]
-
+    total, aprobadas, cursando, regulares, desaprobadas = row
     avance = round((aprobadas / total) * 100, 1) if total > 0 else 0
     return total, aprobadas, cursando, regulares, desaprobadas, avance
 

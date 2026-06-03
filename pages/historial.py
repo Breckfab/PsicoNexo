@@ -1,10 +1,3 @@
-def mostrar(usuario):
-    historial = get_historial(usuario["id"], usuario["carrera_id"])
-    st.write(f"Filas encontradas: {len(historial)}")
-    if historial:
-        st.write(historial[0])
-    st.stop()
-
 import streamlit as st
 from db import get_conn
 from io import BytesIO
@@ -39,10 +32,11 @@ def get_historial(usuario_id, carrera_id):
                     c.profesor1,
                     AVG(e.nota) AS promedio
                 FROM materias m
-                JOIN alumno_materias am ON m.id = am.materia_id AND am.usuario_id = %s
+                LEFT JOIN alumno_materias am ON m.id = am.materia_id AND am.usuario_id = %s
                 LEFT JOIN cursadas c ON m.id = c.materia_id AND c.usuario_id = %s
                 LEFT JOIN evaluaciones e ON m.id = e.materia_id AND e.usuario_id = %s
                 WHERE m.carrera_id = %s
+                AND am.estado IS NOT NULL
                 AND am.estado != 'pendiente'
                 GROUP BY m.nombre, m.anio, m.cuatrimestre, am.estado,
                          c.anio_cursada, c.cuatrimestre, c.profesor1

@@ -104,12 +104,14 @@ def mostrar(usuario):
         todas = get_todas_materias(usuario["carrera_id"])
         opciones = {f"{nombres_anio_map.get(m[2], '')} — {m[1]}": m[0] for m in todas}
 
+        opciones_lista = ["Elegí una materia"] + list(opciones.keys())
+
         if "form_opinion_key" not in st.session_state:
             st.session_state.form_opinion_key = 0
 
         with st.form(f"form_opinion_{st.session_state.form_opinion_key}"):
             profesor = st.text_input("Nombre del profesor/a")
-            materia_label = st.selectbox("Materia que dicta", list(opciones.keys()))
+            materia_label = st.selectbox("Materia que dicta", opciones_lista, index=0)
             valoracion = st.radio("Valoración", VALORACIONES, horizontal=True)
             observaciones = st.text_area("Observaciones (opcional)", height=100)
             submit = st.form_submit_button("💾 Guardar opinión", use_container_width=True)
@@ -117,6 +119,8 @@ def mostrar(usuario):
         if submit:
             if not profesor:
                 st.error("Ingresá el nombre del profesor/a.")
+            elif materia_label == "Elegí una materia":
+                st.error("Seleccioná una materia.")
             else:
                 materia_id = opciones[materia_label]
                 agregar_opinion(usuario["id"], materia_id, profesor.strip(), valoracion, observaciones.strip())

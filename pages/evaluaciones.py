@@ -1,55 +1,49 @@
 import streamlit as st
-from db import get_connection
+from db import get_conn
 from datetime import date
 
 TIPOS = ["Parcial", "Trabajo Práctico", "Recuperatorio", "Reincorporatorio", "Final"]
 
+@st.cache_data(ttl=60)
 def get_todas_materias(carrera_id):
-    conn = get_connection()
-    cur = conn.cursor()
-    cur.execute("""
-        SELECT id, nombre, anio, final_obligatorio
-        FROM materias
-        WHERE carrera_id = %s
-        ORDER BY anio, nombre;
-    """, (carrera_id,))
-    rows = cur.fetchall()
-    cur.close()
-    conn.close()
-    return rows
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT id, nombre, anio, final_obligatorio
+                FROM materias
+                WHERE carrera_id = %s
+                ORDER BY anio, nombre;
+            """, (carrera_id,))
+            return cur.fetchall()
 
+@st.cache_data(ttl=60)
 def get_evaluaciones(usuario_id, materia_id):
-    conn = get_connection()
-    cur = conn.cursor()
-    cur.execute("""
-        SELECT id, tipo, descripcion, nota, fecha, aprobado
-        FROM evaluaciones
-        WHERE usuario_id = %s AND materia_id = %s
-        ORDER BY fecha ASC NULLS LAST, tipo;
-    """, (usuario_id, materia_id))
-    rows = cur.fetchall()
-    cur.close()
-    conn.close()
-    return rows
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT id, tipo, descripcion, nota, fecha, aprobado
+                FROM evaluaciones
+                WHERE usuario_id = %s AND materia_id = %s
+                ORDER BY fecha ASC NULLS LAST, tipo;
+            """, (usuario_id, materia_id))
+            return cur.fetchall()
 
 def agregar_evaluacion(usuario_id, materia_id, tipo, descripcion, nota, fecha, aprobado):
-    conn = get_connection()
-    cur = conn.cursor()
-    cur.execute("""
-        INSERT INTO evaluaciones (usuario_id, materia_id, tipo, descripcion, nota, fecha, aprobado)
-        VALUES (%s, %s, %s, %s, %s, %s, %s);
-    """, (usuario_id, materia_id, tipo, descripcion, nota, fecha, aprobado))
-    conn.commit()
-    cur.close()
-    conn.close()
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO evaluaciones (usuario_id, materia_id, tipo, descripcion, nota, fecha, aprobado)
+                VALUES (%s, %s, %s, %s, %s, %s, %s);
+            """, (usuario_id, materia_id, tipo, descripcion, nota, fecha, aprobado))
+        conn.commit()
+    get_evaluaciones.clear()
 
 def eliminar_evaluacion(eval_id):
-    conn = get_connection()
-    cur = conn.cursor()
-    cur.execute("DELETE FROM evaluaciones WHERE id = %s;", (eval_id,))
-    conn.commit()
-    cur.close()
-    conn.close()
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM evaluaciones WHERE id = %s;", (eval_id,))
+        conn.commit()
+    get_evaluaciones.clear()
 
 def mostrar(usuario):
     st.title("📝 Notas y Evaluaciones")

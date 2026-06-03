@@ -13,15 +13,20 @@ def get_historial(usuario_id, carrera_id):
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute("""
-                SELECT m.nombre, m.anio, m.cuatrimestre, am.estado,
-                       c.anio_cursada, c.cuatrimestre as cuatri_cursada, c.profesor1,
-                       AVG(e.nota) as promedio
+                SELECT
+                    m.nombre,
+                    m.anio,
+                    m.cuatrimestre,
+                    am.estado,
+                    c.anio_cursada,
+                    c.cuatrimestre AS cuatri_cursada,
+                    c.profesor1,
+                    AVG(e.nota) AS promedio
                 FROM materias m
-                LEFT JOIN alumno_materias am ON m.id = am.materia_id AND am.usuario_id = %s
+                JOIN alumno_materias am ON m.id = am.materia_id AND am.usuario_id = %s
                 LEFT JOIN cursadas c ON m.id = c.materia_id AND c.usuario_id = %s
                 LEFT JOIN evaluaciones e ON m.id = e.materia_id AND e.usuario_id = %s
                 WHERE m.carrera_id = %s
-                AND am.estado IS NOT NULL
                 AND am.estado != 'pendiente'
                 GROUP BY m.nombre, m.anio, m.cuatrimestre, am.estado,
                          c.anio_cursada, c.cuatrimestre, c.profesor1
@@ -221,19 +226,4 @@ def mostrar(usuario):
             st.markdown(f"{estado.capitalize()}")
         with col3:
             st.markdown(f"**Cursada**")
-            if anio_cursada and cuatri_cursada:
-                cuatri_corto = CUATRI_TEXTO.get(cuatri_cursada, cuatri_cursada)
-                st.markdown(f"{anio_cursada} · {cuatri_corto}")
-            elif anio_cursada:
-                st.markdown(str(anio_cursada))
-            else:
-                st.markdown("—")
-        with col4:
-            st.markdown(f"**Promedio**")
-            if promedio is not None:
-                color = "#2ecc71" if promedio >= 6 else "#e74c3c"
-                st.markdown(f"<span style='color:{color}; font-weight:bold;'>{float(promedio):.2f}</span>", unsafe_allow_html=True)
-            else:
-                st.markdown("—")
-
-        st.markdown("---")
+            if anio_curs

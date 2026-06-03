@@ -1,3 +1,10 @@
+def mostrar(usuario):
+    historial = get_historial(usuario["id"], usuario["carrera_id"])
+    st.write(f"Filas encontradas: {len(historial)}")
+    if historial:
+        st.write(historial[0])
+    st.stop()
+
 import streamlit as st
 from db import get_conn
 from io import BytesIO

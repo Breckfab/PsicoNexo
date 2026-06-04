@@ -2,6 +2,15 @@ import streamlit as st
 from db import get_conn
 from datetime import datetime, date
 
+def get_cuatrimestre_actual():
+    mes = datetime.now().month
+    if 3 <= mes <= 7:
+        return "1° Cuatrimestre"
+    elif 8 <= mes <= 12:
+        return "2° Cuatrimestre"
+    else:  # enero-febrero
+        return None
+
 @st.cache_data(ttl=60)
 def get_stats(usuario_id, carrera_id):
     with get_conn() as conn:
@@ -23,7 +32,6 @@ def get_stats(usuario_id, carrera_id):
                 FROM total t, conteos c;
             """, (usuario_id, carrera_id))
             row = cur.fetchone()
-
     total, aprobadas, cursando, regulares, desaprobadas = row
     avance = round((aprobadas / total) * 100, 1) if total > 0 else 0
     return total, aprobadas, cursando, regulares, desaprobadas, avance
@@ -58,6 +66,59 @@ def get_tareas_pendientes(usuario_id):
             """, (usuario_id,))
             return cur.fetchall()
 
+@st.cache_data(ttl=60)
+def get_materias_cursando_con_notas(usuario_id, anio_actual, cuatrimestre_actual):
+    """
+    Trae en una sola query todas las materias cursando este cuatrimestre
+    con sus notas agregadas. Incluye también materias 'Anual'.
+    """
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT
+                    m.nombre,
+                    m.anio,
+                    c.cuatrimestre,
+                    c.anio_cursada,
+                    c.profesor1,
+                    c.dias,
+                    c.horario,
+                    c.modalidad,
+                    COUNT(e.id)                          AS total_notas,
+                    ROUND(AVG(e.nota)::numeric, 2)       AS promedio,
+                    COUNT(e.id) FILTER (WHERE e.aprobado = TRUE)  AS aprobadas,
+                    COUNT(e.id) FILTER (WHERE e.aprobado = FALSE AND e.nota IS NOT NULL) AS desaprobadas,
+                    STRING_AGG(
+                        CASE WHEN e.nota IS NOT NULL
+                        THEN e.tipo || ': ' || e.nota::text
+                        END,
+                        ' · ' ORDER BY e.fecha ASC NULLS LAST
+                    ) AS detalle_notas
+                FROM alumno_materias am
+                JOIN materias m ON am.materia_id = m.id
+                LEFT JOIN cursadas c ON c.materia_id = m.id AND c.usuario_id = am.usuario_id
+                LEFT JOIN evaluaciones e ON e.materia_id = m.id AND e.usuario_id = am.usuario_id
+                WHERE am.usuario_id = %s
+                AND am.estado = 'cursando'
+                AND c.anio_cursada = %s
+                AND (c.cuatrimestre = %s OR c.cuatrimestre = 'Anual')
+                GROUP BY m.nombre, m.anio, c.cuatrimestre, c.anio_cursada,
+                         c.profesor1, c.dias, c.horario, c.modalidad
+                ORDER BY m.anio, m.nombre;
+            """, (usuario_id, anio_actual, cuatrimestre_actual))
+            return cur.fetchall()
+
+def calcular_estado_cursada(cuatrimestre):
+    """Determina si una cursada sigue activa según el cuatrimestre y mes actual."""
+    mes = datetime.now().month
+    if cuatrimestre == "Anual":
+        return "En curso" if 3 <= mes <= 11 else "Finalizada"
+    elif cuatrimestre == "1° Cuatrimestre":
+        return "En curso" if 3 <= mes <= 7 else "Finalizada"
+    elif cuatrimestre == "2° Cuatrimestre":
+        return "En curso" if 8 <= mes <= 12 else "Finalizada"
+    return "En curso"
+
 def mostrar(usuario):
     st.title("🧠 PsicoNexo")
     st.markdown(f"### Bienvenido/a, {usuario['nombre'].split()[0]} 👋")
@@ -81,6 +142,80 @@ def mostrar(usuario):
     st.progress(avance / 100)
 
     st.markdown("---")
+
+    # — Materias cursando este cuatrimestre —
+    cuatrimestre_actual = get_cuatrimestre_actual()
+    anio_actual = datetime.now().year
+
+    if cuatrimestre_actual:
+        st.markdown(f"### 📚 Cursando — {cuatrimestre_actual} {anio_actual}")
+        materias_cursando = get_materias_cursando_con_notas(
+            usuario["id"], anio_actual, cuatrimestre_actual
+        )
+
+        if not materias_cursando:
+            st.info("No tenés materias registradas para este cuatrimestre.")
+        else:
+            for m in materias_cursando:
+                (mnombre, manio, mcuatri, manio_cursada, mprofesor,
+                 mdias, mhorario, mmodalidad, total_notas,
+                 promedio, aprobadas_ev, desaprobadas_ev, detalle_notas) = m
+
+                estado = calcular_estado_cursada(mcuatri)
+                badge_color = "#2ecc71" if estado == "En curso" else "#95a5a6"
+
+                with st.expander(f"📖 {mnombre}", expanded=True):
+                    col_a, col_b = st.columns([3, 1])
+                    with col_a:
+                        if mprofesor:
+                            st.caption(f"👨‍🏫 {mprofesor}")
+                        if mdias or mhorario:
+                            dias_text = mdias or ""
+                            horario_text = f"· {mhorario}" if mhorario else ""
+                            st.caption(f"🗓️ {dias_text} {horario_text} — {mmodalidad or ''}")
+                    with col_b:
+                        st.markdown(
+                            f"<div style='text-align:right;'>"
+                            f"<span style='background:{badge_color}; color:white; "
+                            f"padding:3px 10px; border-radius:12px; font-size:12px;'>"
+                            f"{estado}</span></div>",
+                            unsafe_allow_html=True
+                        )
+
+                    st.markdown("**Notas cargadas:**")
+                    if total_notas and int(total_notas) > 0:
+                        col1, col2, col3 = st.columns(3)
+                        with col1:
+                            color_prom = "#2ecc71" if promedio and promedio >= 6 else "#e74c3c"
+                            st.markdown(
+                                f"<div style='text-align:center;'>"
+                                f"<div style='font-size:11px; color:#aaa;'>Promedio</div>"
+                                f"<div style='font-size:24px; font-weight:bold; color:{color_prom};'>"
+                                f"{promedio}</div></div>",
+                                unsafe_allow_html=True
+                            )
+                        with col2:
+                            st.markdown(
+                                f"<div style='text-align:center;'>"
+                                f"<div style='font-size:11px; color:#aaa;'>✅ Aprobadas</div>"
+                                f"<div style='font-size:20px; font-weight:bold; color:#2ecc71;'>"
+                                f"{aprobadas_ev}</div></div>",
+                                unsafe_allow_html=True
+                            )
+                        with col3:
+                            st.markdown(
+                                f"<div style='text-align:center;'>"
+                                f"<div style='font-size:11px; color:#aaa;'>❌ Desaprobadas</div>"
+                                f"<div style='font-size:20px; font-weight:bold; color:#e74c3c;'>"
+                                f"{desaprobadas_ev}</div></div>",
+                                unsafe_allow_html=True
+                            )
+                        if detalle_notas:
+                            st.caption(f"📋 {detalle_notas}")
+                    else:
+                        st.caption("Todavía no cargaste notas para esta materia.")
+
+        st.markdown("---")
 
     col1, col2 = st.columns(2)
 

@@ -8,8 +8,8 @@ def get_cuatrimestre_actual():
         return "1° Cuatrimestre"
     elif 8 <= mes <= 12:
         return "2° Cuatrimestre"
-    else:  # enero-febrero
-        return None
+    else:  # enero-febrero: mostrar 2° cuatrimestre del año anterior
+        return "2° Cuatrimestre"
 
 @st.cache_data(ttl=60)
 def get_stats(usuario_id, carrera_id):
@@ -68,10 +68,6 @@ def get_tareas_pendientes(usuario_id):
 
 @st.cache_data(ttl=60)
 def get_materias_cursando_con_notas(usuario_id, anio_actual, cuatrimestre_actual):
-    """
-    Trae en una sola query todas las materias cursando este cuatrimestre
-    con sus notas agregadas. Incluye también materias 'Anual'.
-    """
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute("""
@@ -109,7 +105,6 @@ def get_materias_cursando_con_notas(usuario_id, anio_actual, cuatrimestre_actual
             return cur.fetchall()
 
 def calcular_estado_cursada(cuatrimestre):
-    """Determina si una cursada sigue activa según el cuatrimestre y mes actual."""
     mes = datetime.now().month
     if cuatrimestre == "Anual":
         return "En curso" if 3 <= mes <= 11 else "Finalizada"
@@ -145,77 +140,77 @@ def mostrar(usuario):
 
     # — Materias cursando este cuatrimestre —
     cuatrimestre_actual = get_cuatrimestre_actual()
-    anio_actual = datetime.now().year
+    mes_actual = datetime.now().month
+    anio_actual = datetime.now().year if mes_actual >= 3 else datetime.now().year - 1
 
-    if cuatrimestre_actual:
-        st.markdown(f"### 📚 Cursando — {cuatrimestre_actual} {anio_actual}")
-        materias_cursando = get_materias_cursando_con_notas(
-            usuario["id"], anio_actual, cuatrimestre_actual
-        )
+    st.markdown(f"### 📚 Cursando — {cuatrimestre_actual} {anio_actual}")
+    materias_cursando = get_materias_cursando_con_notas(
+        usuario["id"], anio_actual, cuatrimestre_actual
+    )
 
-        if not materias_cursando:
-            st.info("No tenés materias registradas para este cuatrimestre.")
-        else:
-            for m in materias_cursando:
-                (mnombre, manio, mcuatri, manio_cursada, mprofesor,
-                 mdias, mhorario, mmodalidad, total_notas,
-                 promedio, aprobadas_ev, desaprobadas_ev, detalle_notas) = m
+    if not materias_cursando:
+        st.info("No tenés materias registradas para este cuatrimestre.")
+    else:
+        for m in materias_cursando:
+            (mnombre, manio, mcuatri, manio_cursada, mprofesor,
+             mdias, mhorario, mmodalidad, total_notas,
+             promedio, aprobadas_ev, desaprobadas_ev, detalle_notas) = m
 
-                estado = calcular_estado_cursada(mcuatri)
-                badge_color = "#2ecc71" if estado == "En curso" else "#95a5a6"
+            estado = calcular_estado_cursada(mcuatri)
+            badge_color = "#2ecc71" if estado == "En curso" else "#95a5a6"
 
-                with st.expander(f"📖 {mnombre}", expanded=True):
-                    col_a, col_b = st.columns([3, 1])
-                    with col_a:
-                        if mprofesor:
-                            st.caption(f"👨‍🏫 {mprofesor}")
-                        if mdias or mhorario:
-                            dias_text = mdias or ""
-                            horario_text = f"· {mhorario}" if mhorario else ""
-                            st.caption(f"🗓️ {dias_text} {horario_text} — {mmodalidad or ''}")
-                    with col_b:
+            with st.expander(f"📖 {mnombre}", expanded=True):
+                col_a, col_b = st.columns([3, 1])
+                with col_a:
+                    if mprofesor:
+                        st.caption(f"👨‍🏫 {mprofesor}")
+                    if mdias or mhorario:
+                        dias_text = mdias or ""
+                        horario_text = f"· {mhorario}" if mhorario else ""
+                        st.caption(f"🗓️ {dias_text} {horario_text} — {mmodalidad or ''}")
+                with col_b:
+                    st.markdown(
+                        f"<div style='text-align:right;'>"
+                        f"<span style='background:{badge_color}; color:white; "
+                        f"padding:3px 10px; border-radius:12px; font-size:12px;'>"
+                        f"{estado}</span></div>",
+                        unsafe_allow_html=True
+                    )
+
+                st.markdown("**Notas cargadas:**")
+                if total_notas and int(total_notas) > 0:
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        color_prom = "#2ecc71" if promedio and promedio >= 6 else "#e74c3c"
                         st.markdown(
-                            f"<div style='text-align:right;'>"
-                            f"<span style='background:{badge_color}; color:white; "
-                            f"padding:3px 10px; border-radius:12px; font-size:12px;'>"
-                            f"{estado}</span></div>",
+                            f"<div style='text-align:center;'>"
+                            f"<div style='font-size:11px; color:#aaa;'>Promedio</div>"
+                            f"<div style='font-size:24px; font-weight:bold; color:{color_prom};'>"
+                            f"{promedio}</div></div>",
                             unsafe_allow_html=True
                         )
+                    with col2:
+                        st.markdown(
+                            f"<div style='text-align:center;'>"
+                            f"<div style='font-size:11px; color:#aaa;'>✅ Aprobadas</div>"
+                            f"<div style='font-size:20px; font-weight:bold; color:#2ecc71;'>"
+                            f"{aprobadas_ev}</div></div>",
+                            unsafe_allow_html=True
+                        )
+                    with col3:
+                        st.markdown(
+                            f"<div style='text-align:center;'>"
+                            f"<div style='font-size:11px; color:#aaa;'>❌ Desaprobadas</div>"
+                            f"<div style='font-size:20px; font-weight:bold; color:#e74c3c;'>"
+                            f"{desaprobadas_ev}</div></div>",
+                            unsafe_allow_html=True
+                        )
+                    if detalle_notas:
+                        st.caption(f"📋 {detalle_notas}")
+                else:
+                    st.caption("Todavía no cargaste notas para esta materia.")
 
-                    st.markdown("**Notas cargadas:**")
-                    if total_notas and int(total_notas) > 0:
-                        col1, col2, col3 = st.columns(3)
-                        with col1:
-                            color_prom = "#2ecc71" if promedio and promedio >= 6 else "#e74c3c"
-                            st.markdown(
-                                f"<div style='text-align:center;'>"
-                                f"<div style='font-size:11px; color:#aaa;'>Promedio</div>"
-                                f"<div style='font-size:24px; font-weight:bold; color:{color_prom};'>"
-                                f"{promedio}</div></div>",
-                                unsafe_allow_html=True
-                            )
-                        with col2:
-                            st.markdown(
-                                f"<div style='text-align:center;'>"
-                                f"<div style='font-size:11px; color:#aaa;'>✅ Aprobadas</div>"
-                                f"<div style='font-size:20px; font-weight:bold; color:#2ecc71;'>"
-                                f"{aprobadas_ev}</div></div>",
-                                unsafe_allow_html=True
-                            )
-                        with col3:
-                            st.markdown(
-                                f"<div style='text-align:center;'>"
-                                f"<div style='font-size:11px; color:#aaa;'>❌ Desaprobadas</div>"
-                                f"<div style='font-size:20px; font-weight:bold; color:#e74c3c;'>"
-                                f"{desaprobadas_ev}</div></div>",
-                                unsafe_allow_html=True
-                            )
-                        if detalle_notas:
-                            st.caption(f"📋 {detalle_notas}")
-                    else:
-                        st.caption("Todavía no cargaste notas para esta materia.")
-
-        st.markdown("---")
+    st.markdown("---")
 
     col1, col2 = st.columns(2)
 

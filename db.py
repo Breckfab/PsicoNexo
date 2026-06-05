@@ -190,6 +190,18 @@ def init_db():
     """)
 
     cur.execute("""
+        CREATE TABLE IF NOT EXISTS configuracion_cuatrimestre (
+            id SERIAL PRIMARY KEY,
+            usuario_id INTEGER REFERENCES usuarios(id),
+            anio INTEGER NOT NULL,
+            cuatrimestre TEXT NOT NULL,
+            fecha_inicio DATE NOT NULL,
+            fecha_fin DATE NOT NULL,
+            UNIQUE(usuario_id, anio, cuatrimestre)
+        );
+    """)
+
+    cur.execute("""
         INSERT INTO carreras (nombre, universidad)
         VALUES ('Licenciatura en Psicología', 'UdeMM')
         ON CONFLICT (nombre, universidad) DO NOTHING;

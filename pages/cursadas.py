@@ -34,7 +34,6 @@ def get_todas_materias(carrera_id):
 
 @st.cache_data(ttl=60)
 def get_todas_cursadas(usuario_id):
-    """Trae todas las cursadas del usuario de una vez."""
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute("""
@@ -224,10 +223,23 @@ def mostrar(usuario):
                                 st.session_state[f"editando_cursada_{mid}"] = True
                                 st.rerun()
                         with col_borrar:
-                            if st.button("🗑️ Borrar", key=f"borrar_cursada_{mid}", use_container_width=True):
-                                borrar_cursada(usuario["id"], mid)
-                                st.success("Cursada borrada.")
-                                st.rerun()
+                            key_confirmar = f"confirmar_del_cursada_{mid}"
+                            if st.session_state.get(key_confirmar):
+                                col_si, col_no = st.columns(2)
+                                with col_si:
+                                    if st.button("✅ Confirmar", key=f"si_del_cursada_{mid}", use_container_width=True):
+                                        borrar_cursada(usuario["id"], mid)
+                                        st.session_state[key_confirmar] = False
+                                        st.success("Cursada borrada.")
+                                        st.rerun()
+                                with col_no:
+                                    if st.button("❌ Cancelar", key=f"no_del_cursada_{mid}", use_container_width=True):
+                                        st.session_state[key_confirmar] = False
+                                        st.rerun()
+                            else:
+                                if st.button("🗑️ Borrar", key=f"borrar_cursada_{mid}", use_container_width=True):
+                                    st.session_state[key_confirmar] = True
+                                    st.rerun()
 
                         if st.session_state.get(f"editando_cursada_{mid}"):
                             with st.form(f"form_edit_cursada_{mid}"):
@@ -317,52 +329,77 @@ def mostrar(usuario):
             tareas_dict = {t[1]: t for t in tareas}
             hoy = date.today()
 
-            for num in [1, 2, 3]:
-                tarea = tareas_dict.get(num)
-                with st.expander(f"📌 Tarea {num}", expanded=True):
-                    if tarea:
-                        tid, tnum, tdesc, tvenc, tcomp = tarea
-                        vencida = tvenc and tvenc < hoy and not tcomp
-                        estado_icon = "✅ Completada" if tcomp else ("🔴 Vencida" if vencida else "⏳ Pendiente")
-                        st.markdown(f"**{tdesc or 'Sin descripción'}**")
-                        st.markdown(f"Vence: {str(tvenc) if tvenc else '—'} — {estado_icon}")
+            # Tareas existentes
+            nums_existentes = sorted(tareas_dict.keys())
+            # Próximo número disponible
+            todos_nums = list(range(1, max(nums_existentes) + 2)) if nums_existentes else [1]
+            nums_a_mostrar = nums_existentes + [max(todos_nums)]  # existentes + 1 nueva
 
-                        col1, col2, col3 = st.columns(3)
-                        with col1:
-                            if st.button("✏️ Editar", key=f"edit_tarea_{num}", use_container_width=True):
-                                st.session_state[f"editando_tarea_{num}"] = True
-                                st.rerun()
-                        with col2:
-                            if st.button("✅ Completar", key=f"comp_tarea_{num}", use_container_width=True):
+            # Mostrar todas las tareas existentes
+            for num in nums_existentes:
+                tarea = tareas_dict[num]
+                with st.expander(f"📌 Tarea {num}", expanded=True):
+                    tid, tnum, tdesc, tvenc, tcomp = tarea
+                    vencida = tvenc and tvenc < hoy and not tcomp
+                    estado_icon = "✅ Completada" if tcomp else ("🔴 Vencida" if vencida else "⏳ Pendiente")
+                    st.markdown(f"**{tdesc or 'Sin descripción'}**")
+                    st.markdown(f"Vence: {str(tvenc) if tvenc else '—'} — {estado_icon}")
+
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        if st.button("✏️ Editar", key=f"edit_tarea_{num}_{materia_tarea_id}", use_container_width=True):
+                            st.session_state[f"editando_tarea_{num}_{materia_tarea_id}"] = True
+                            st.rerun()
+                    with col2:
+                        if not tcomp:
+                            if st.button("✅ Completar", key=f"comp_tarea_{num}_{materia_tarea_id}", use_container_width=True):
                                 actualizar_tarea(tid, tdesc, tvenc, True)
                                 st.rerun()
-                        with col3:
-                            if st.button("🗑️ Borrar", key=f"borrar_tarea_{num}", use_container_width=True):
-                                borrar_tarea(tid)
+                    with col3:
+                        key_confirmar_t = f"confirmar_del_tarea_{tid}"
+                        if st.session_state.get(key_confirmar_t):
+                            col_si, col_no = st.columns(2)
+                            with col_si:
+                                if st.button("✅", key=f"si_del_t_{tid}", use_container_width=True):
+                                    borrar_tarea(tid)
+                                    st.session_state[key_confirmar_t] = False
+                                    st.rerun()
+                            with col_no:
+                                if st.button("❌", key=f"no_del_t_{tid}", use_container_width=True):
+                                    st.session_state[key_confirmar_t] = False
+                                    st.rerun()
+                        else:
+                            if st.button("🗑️ Borrar", key=f"borrar_tarea_{num}_{materia_tarea_id}", use_container_width=True):
+                                st.session_state[key_confirmar_t] = True
                                 st.rerun()
 
-                        if st.session_state.get(f"editando_tarea_{num}"):
-                            with st.form(f"form_edit_tarea_{num}"):
-                                nueva_desc = st.text_input("Descripción", value=tdesc or "")
-                                nueva_fecha = st.date_input("Fecha de vencimiento", value=tvenc or hoy)
-                                nuevo_comp = st.checkbox("Completada", value=tcomp)
-                                col1, col2 = st.columns(2)
-                                with col1:
-                                    if st.form_submit_button("💾 Guardar", use_container_width=True):
-                                        actualizar_tarea(tid, nueva_desc, nueva_fecha, nuevo_comp)
-                                        st.session_state[f"editando_tarea_{num}"] = False
-                                        st.rerun()
-                                with col2:
-                                    if st.form_submit_button("❌ Cancelar", use_container_width=True):
-                                        st.session_state[f"editando_tarea_{num}"] = False
-                                        st.rerun()
-                    else:
-                        if f"tarea_key_{num}" not in st.session_state:
-                            st.session_state[f"tarea_key_{num}"] = 0
-                        with st.form(f"form_nueva_tarea_{num}_{st.session_state[f'tarea_key_{num}']}"):
-                            desc = st.text_input(f"Descripción de la tarea {num}")
-                            fecha = st.date_input("Fecha de vencimiento", value=hoy)
-                            if st.form_submit_button("💾 Guardar", use_container_width=True):
-                                guardar_tarea(usuario["id"], materia_tarea_id, num, desc, fecha)
-                                st.session_state[f"tarea_key_{num}"] += 1
-                                st.rerun()
+                    if st.session_state.get(f"editando_tarea_{num}_{materia_tarea_id}"):
+                        with st.form(f"form_edit_tarea_{num}_{materia_tarea_id}"):
+                            nueva_desc = st.text_input("Descripción", value=tdesc or "")
+                            nueva_fecha = st.date_input("Fecha de vencimiento", value=tvenc or hoy)
+                            nuevo_comp = st.checkbox("Completada", value=tcomp)
+                            col1, col2 = st.columns(2)
+                            with col1:
+                                if st.form_submit_button("💾 Guardar", use_container_width=True):
+                                    actualizar_tarea(tid, nueva_desc, nueva_fecha, nuevo_comp)
+                                    st.session_state[f"editando_tarea_{num}_{materia_tarea_id}"] = False
+                                    st.rerun()
+                            with col2:
+                                if st.form_submit_button("❌ Cancelar", use_container_width=True):
+                                    st.session_state[f"editando_tarea_{num}_{materia_tarea_id}"] = False
+                                    st.rerun()
+
+            # Siempre mostrar formulario para agregar nueva tarea
+            nuevo_num = (max(nums_existentes) + 1) if nums_existentes else 1
+            st.markdown("---")
+            with st.expander(f"➕ Agregar Tarea {nuevo_num}", expanded=False):
+                key_nueva = f"tarea_nueva_key_{materia_tarea_id}"
+                if key_nueva not in st.session_state:
+                    st.session_state[key_nueva] = 0
+                with st.form(f"form_nueva_tarea_{materia_tarea_id}_{st.session_state[key_nueva]}"):
+                    desc = st.text_input(f"Descripción de la Tarea {nuevo_num}")
+                    fecha = st.date_input("Fecha de vencimiento", value=hoy)
+                    if st.form_submit_button("💾 Guardar", use_container_width=True):
+                        guardar_tarea(usuario["id"], materia_tarea_id, nuevo_num, desc, fecha)
+                        st.session_state[key_nueva] += 1
+                        st.rerun()

@@ -1,6 +1,6 @@
 import streamlit as st
 from db import get_conn
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 
 def get_cuatrimestre_actual():
     mes = datetime.now().month
@@ -10,6 +10,61 @@ def get_cuatrimestre_actual():
         return "2° Cuatrimestre"
     else:
         return "2° Cuatrimestre"
+
+# ─── Configuración de cuatrimestre ────────────────────────────────────────────
+
+@st.cache_data(ttl=300)
+def get_config_cuatrimestre(usuario_id, anio, cuatrimestre):
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT fecha_inicio, fecha_fin
+                FROM configuracion_cuatrimestre
+                WHERE usuario_id = %s AND anio = %s AND cuatrimestre = %s;
+            """, (usuario_id, anio, cuatrimestre))
+            return cur.fetchone()
+
+@st.cache_data(ttl=300)
+def get_todas_configs(usuario_id):
+    """Trae todas las configuraciones del usuario de una sola vez."""
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT anio, cuatrimestre, fecha_inicio, fecha_fin
+                FROM configuracion_cuatrimestre
+                WHERE usuario_id = %s
+                ORDER BY anio DESC, cuatrimestre;
+            """, (usuario_id,))
+            rows = cur.fetchall()
+    return {(r[0], r[1]): (r[2], r[3]) for r in rows}
+
+def guardar_config_cuatrimestre(usuario_id, anio, cuatrimestre, fecha_inicio, fecha_fin):
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO configuracion_cuatrimestre (usuario_id, anio, cuatrimestre, fecha_inicio, fecha_fin)
+                VALUES (%s, %s, %s, %s, %s)
+                ON CONFLICT (usuario_id, anio, cuatrimestre)
+                DO UPDATE SET fecha_inicio = EXCLUDED.fecha_inicio, fecha_fin = EXCLUDED.fecha_fin;
+            """, (usuario_id, anio, cuatrimestre, fecha_inicio, fecha_fin))
+        conn.commit()
+    get_config_cuatrimestre.clear()
+    get_todas_configs.clear()
+
+def calcular_progreso_cuatrimestre(fecha_inicio, fecha_fin):
+    """Devuelve (porcentaje 0-100, dias_transcurridos, dias_totales, estado_texto)."""
+    hoy = date.today()
+    if hoy < fecha_inicio:
+        return 0, 0, (fecha_fin - fecha_inicio).days, "No iniciado"
+    if hoy > fecha_fin:
+        return 100, (fecha_fin - fecha_inicio).days, (fecha_fin - fecha_inicio).days, "Finalizado"
+    dias_transcurridos = (hoy - fecha_inicio).days
+    dias_totales = (fecha_fin - fecha_inicio).days
+    porcentaje = round((dias_transcurridos / dias_totales) * 100, 1) if dias_totales > 0 else 0
+    dias_restantes = (fecha_fin - hoy).days
+    return porcentaje, dias_transcurridos, dias_totales, f"{dias_restantes} días restantes"
+
+# ─── Queries principales ───────────────────────────────────────────────────────
 
 @st.cache_data(ttl=60)
 def get_stats(usuario_id, carrera_id):
@@ -95,10 +150,10 @@ def get_materias_cursando_con_notas(usuario_id, anio_actual, cuatrimestre_actual
                     SELECT
                         e.materia_id,
                         e.usuario_id,
-                        COUNT(e.id)                                                        AS total_notas,
-                        ROUND(AVG(e.nota)::numeric, 2)                                     AS promedio,
-                        COUNT(e.id) FILTER (WHERE e.aprobado = TRUE)                       AS aprobadas,
-                        COUNT(e.id) FILTER (WHERE e.aprobado = FALSE AND e.nota IS NOT NULL) AS desaprobadas,
+                        COUNT(e.id)                                                          AS total_notas,
+                        ROUND(AVG(e.nota)::numeric, 2)                                       AS promedio,
+                        COUNT(e.id) FILTER (WHERE e.aprobado = TRUE)                         AS aprobadas,
+                        COUNT(e.id) FILTER (WHERE e.aprobado = FALSE AND e.nota IS NOT NULL)  AS desaprobadas,
                         STRING_AGG(
                             CASE WHEN e.nota IS NOT NULL
                                 THEN e.tipo || ': ' || e.nota::text
@@ -118,10 +173,10 @@ def get_materias_cursando_con_notas(usuario_id, anio_actual, cuatrimestre_actual
                     mc.dias,
                     mc.horario,
                     mc.modalidad,
-                    COALESCE(na.total_notas, 0)   AS total_notas,
+                    COALESCE(na.total_notas, 0)  AS total_notas,
                     na.promedio,
-                    COALESCE(na.aprobadas, 0)      AS aprobadas,
-                    COALESCE(na.desaprobadas, 0)   AS desaprobadas,
+                    COALESCE(na.aprobadas, 0)    AS aprobadas,
+                    COALESCE(na.desaprobadas, 0) AS desaprobadas,
                     na.detalle_notas
                 FROM materias_cursando mc
                 LEFT JOIN notas_agg na
@@ -140,6 +195,112 @@ def calcular_estado_cursada(cuatrimestre):
         return "En curso" if 8 <= mes <= 12 else "Finalizada"
     return "En curso"
 
+# ─── Panel de configuración de fechas ─────────────────────────────────────────
+
+def mostrar_config_fechas(usuario_id, anio_actual, cuatrimestre_actual):
+    todas_configs = get_todas_configs(usuario_id)
+
+    # Detectar cuatrimestres activos para este alumno (los que tiene cursadas)
+    cuatris_para_config = []
+    config_actual = todas_configs.get((anio_actual, cuatrimestre_actual))
+    if cuatrimestre_actual != "Anual":
+        cuatris_para_config.append((anio_actual, cuatrimestre_actual))
+    cuatris_para_config.append((anio_actual, "Anual"))
+
+    with st.expander("⚙️ Configurar fechas del cuatrimestre", expanded=not config_actual):
+        st.caption("Definí las fechas de inicio y fin para calcular el progreso de cada materia.")
+
+        # Valores por defecto según cuatrimestre
+        defaults = {
+            "1° Cuatrimestre": (date(anio_actual, 3, 17), date(anio_actual, 7, 18)),
+            "2° Cuatrimestre": (date(anio_actual, 8, 4), date(anio_actual, 11, 28)),
+            "Anual":           (date(anio_actual, 3, 17), date(anio_actual, 11, 28)),
+        }
+
+        CUATRIS = ["1° Cuatrimestre", "2° Cuatrimestre", "Anual"]
+
+        col_sel, _ = st.columns([2, 3])
+        with col_sel:
+            cuatri_editar = st.selectbox(
+                "Cuatrimestre a configurar",
+                CUATRIS,
+                index=CUATRIS.index(cuatrimestre_actual) if cuatrimestre_actual in CUATRIS else 0,
+                key="cfg_cuatri_sel"
+            )
+
+        config_existente = todas_configs.get((anio_actual, cuatri_editar))
+        def_ini, def_fin = defaults.get(cuatri_editar, (date(anio_actual, 3, 1), date(anio_actual, 11, 30)))
+
+        with st.form("form_config_cuatrimestre"):
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                anio_cfg = st.number_input("Año", min_value=2020, max_value=2040,
+                                           value=anio_actual, key="cfg_anio")
+            with col2:
+                fecha_ini = st.date_input("Fecha de inicio",
+                                          value=config_existente[0] if config_existente else def_ini,
+                                          key="cfg_ini")
+            with col3:
+                fecha_fin = st.date_input("Fecha de fin",
+                                          value=config_existente[1] if config_existente else def_fin,
+                                          key="cfg_fin")
+
+            col_g, col_c = st.columns(2)
+            with col_g:
+                guardar = st.form_submit_button("💾 Guardar fechas", use_container_width=True)
+            with col_c:
+                st.form_submit_button("❌ Cancelar", use_container_width=True)
+
+        if guardar:
+            if fecha_fin <= fecha_ini:
+                st.error("La fecha de fin debe ser posterior a la de inicio.")
+            else:
+                guardar_config_cuatrimestre(usuario_id, anio_cfg, cuatri_editar, fecha_ini, fecha_fin)
+                st.success(f"✅ Fechas guardadas: {fecha_ini.strftime('%d/%m/%Y')} → {fecha_fin.strftime('%d/%m/%Y')}")
+                st.rerun()
+
+        # Mostrar configuraciones guardadas
+        if todas_configs:
+            st.markdown("**Configuraciones guardadas:**")
+            for (anio_c, cuatri_c), (fi, ff) in sorted(todas_configs.items(), reverse=True):
+                col_info, col_edit = st.columns([4, 1])
+                with col_info:
+                    st.caption(f"📅 {cuatri_c} {anio_c}: {fi.strftime('%d/%m/%Y')} → {ff.strftime('%d/%m/%Y')}")
+
+# ─── Barra de progreso de cuatrimestre ────────────────────────────────────────
+
+def mostrar_barra_cuatrimestre(cuatrimestre, anio_cursada, todas_configs):
+    config = todas_configs.get((anio_cursada, cuatrimestre))
+    if not config:
+        st.caption("⚙️ Configurá las fechas del cuatrimestre para ver el progreso temporal.")
+        return
+
+    fecha_inicio, fecha_fin = config
+    porcentaje, dias_trans, dias_total, estado_texto = calcular_progreso_cuatrimestre(fecha_inicio, fecha_fin)
+
+    color_barra = "#2ecc71" if porcentaje < 75 else ("#f39c12" if porcentaje < 90 else "#e74c3c")
+
+    st.markdown(
+        f"""
+        <div style="margin-top:8px; margin-bottom:4px;">
+            <div style="display:flex; justify-content:space-between; font-size:11px; color:#aaa; margin-bottom:3px;">
+                <span>📅 {fecha_inicio.strftime('%d/%m')} → {fecha_fin.strftime('%d/%m/%Y')}</span>
+                <span style="color:{color_barra}; font-weight:bold;">{porcentaje}% — {estado_texto}</span>
+            </div>
+            <div style="background:#2a2a3e; border-radius:6px; height:8px; overflow:hidden;">
+                <div style="width:{porcentaje}%; background:{color_barra}; height:8px; border-radius:6px;
+                            transition:width 0.3s ease;"></div>
+            </div>
+            <div style="font-size:10px; color:#666; margin-top:2px;">
+                {dias_trans} de {dias_total} días cursados
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+
+# ─── Vista principal ───────────────────────────────────────────────────────────
+
 def mostrar(usuario):
     st.title("🧠 PsicoNexo")
     st.markdown(f"### Bienvenido/a, {usuario['nombre'].split()[0]} 👋")
@@ -156,7 +317,7 @@ def mostrar(usuario):
     with col4:
         st.metric("❌ Desaprobadas", desaprobadas)
     with col5:
-        st.metric("🎯 Avance", f"{avance}%")
+        st.metric("🎯 Avance carrera", f"{avance}%")
 
     st.markdown("---")
     st.markdown(f"**Progreso de la carrera: {aprobadas} de {total} materias aprobadas**")
@@ -168,10 +329,18 @@ def mostrar(usuario):
     mes_actual = datetime.now().month
     anio_actual = datetime.now().year if mes_actual >= 3 else datetime.now().year - 1
 
+    # Panel de configuración de fechas
+    mostrar_config_fechas(usuario["id"], anio_actual, cuatrimestre_actual)
+
+    st.markdown("---")
+
     st.markdown(f"### 📚 Cursando — {cuatrimestre_actual} {anio_actual}")
     materias_cursando = get_materias_cursando_con_notas(
         usuario["id"], anio_actual, cuatrimestre_actual
     )
+
+    # Traer todas las configs una sola vez para usarlas en cada materia
+    todas_configs = get_todas_configs(usuario["id"])
 
     if not materias_cursando:
         st.info("No tenés materias registradas para este cuatrimestre.")
@@ -201,6 +370,9 @@ def mostrar(usuario):
                         f"{estado}</span></div>",
                         unsafe_allow_html=True
                     )
+
+                # Barra de progreso temporal del cuatrimestre
+                mostrar_barra_cuatrimestre(mcuatri, manio_cursada, todas_configs)
 
                 st.markdown("**Notas cargadas:**")
                 if total_notas and int(total_notas) > 0:

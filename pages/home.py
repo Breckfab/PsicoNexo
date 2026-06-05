@@ -8,7 +8,7 @@ def get_cuatrimestre_actual():
         return "1° Cuatrimestre"
     elif 8 <= mes <= 12:
         return "2° Cuatrimestre"
-    else:  # enero-febrero: mostrar 2° cuatrimestre del año anterior
+    else:
         return "2° Cuatrimestre"
 
 @st.cache_data(ttl=60)
@@ -71,37 +71,63 @@ def get_materias_cursando_con_notas(usuario_id, anio_actual, cuatrimestre_actual
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute("""
+                WITH materias_cursando AS (
+                    SELECT
+                        m.nombre,
+                        m.anio,
+                        c.cuatrimestre,
+                        c.anio_cursada,
+                        c.profesor1,
+                        c.dias,
+                        c.horario,
+                        c.modalidad,
+                        m.id AS materia_id,
+                        am.usuario_id
+                    FROM alumno_materias am
+                    JOIN materias m ON am.materia_id = m.id
+                    JOIN cursadas c ON c.materia_id = m.id AND c.usuario_id = am.usuario_id
+                    WHERE am.usuario_id = %s
+                      AND am.estado = 'cursando'
+                      AND c.anio_cursada = %s
+                      AND (c.cuatrimestre = %s OR c.cuatrimestre = 'Anual')
+                ),
+                notas_agg AS (
+                    SELECT
+                        e.materia_id,
+                        e.usuario_id,
+                        COUNT(e.id)                                                        AS total_notas,
+                        ROUND(AVG(e.nota)::numeric, 2)                                     AS promedio,
+                        COUNT(e.id) FILTER (WHERE e.aprobado = TRUE)                       AS aprobadas,
+                        COUNT(e.id) FILTER (WHERE e.aprobado = FALSE AND e.nota IS NOT NULL) AS desaprobadas,
+                        STRING_AGG(
+                            CASE WHEN e.nota IS NOT NULL
+                                THEN e.tipo || ': ' || e.nota::text
+                            END,
+                            ' · ' ORDER BY e.fecha ASC NULLS LAST
+                        ) AS detalle_notas
+                    FROM evaluaciones e
+                    WHERE e.usuario_id = %s
+                    GROUP BY e.materia_id, e.usuario_id
+                )
                 SELECT
-                    m.nombre,
-                    m.anio,
-                    c.cuatrimestre,
-                    c.anio_cursada,
-                    c.profesor1,
-                    c.dias,
-                    c.horario,
-                    c.modalidad,
-                    COUNT(e.id)                          AS total_notas,
-                    ROUND(AVG(e.nota)::numeric, 2)       AS promedio,
-                    COUNT(e.id) FILTER (WHERE e.aprobado = TRUE)  AS aprobadas,
-                    COUNT(e.id) FILTER (WHERE e.aprobado = FALSE AND e.nota IS NOT NULL) AS desaprobadas,
-                    STRING_AGG(
-                        CASE WHEN e.nota IS NOT NULL
-                        THEN e.tipo || ': ' || e.nota::text
-                        END,
-                        ' · ' ORDER BY e.fecha ASC NULLS LAST
-                    ) AS detalle_notas
-                FROM alumno_materias am
-                JOIN materias m ON am.materia_id = m.id
-                LEFT JOIN cursadas c ON c.materia_id = m.id AND c.usuario_id = am.usuario_id
-                LEFT JOIN evaluaciones e ON e.materia_id = m.id AND e.usuario_id = am.usuario_id
-                WHERE am.usuario_id = %s
-                AND am.estado = 'cursando'
-                AND c.anio_cursada = %s
-                AND (c.cuatrimestre = %s OR c.cuatrimestre = 'Anual')
-                GROUP BY m.nombre, m.anio, c.cuatrimestre, c.anio_cursada,
-                         c.profesor1, c.dias, c.horario, c.modalidad
-                ORDER BY m.anio, m.nombre;
-            """, (usuario_id, anio_actual, cuatrimestre_actual))
+                    mc.nombre,
+                    mc.anio,
+                    mc.cuatrimestre,
+                    mc.anio_cursada,
+                    mc.profesor1,
+                    mc.dias,
+                    mc.horario,
+                    mc.modalidad,
+                    COALESCE(na.total_notas, 0)   AS total_notas,
+                    na.promedio,
+                    COALESCE(na.aprobadas, 0)      AS aprobadas,
+                    COALESCE(na.desaprobadas, 0)   AS desaprobadas,
+                    na.detalle_notas
+                FROM materias_cursando mc
+                LEFT JOIN notas_agg na
+                    ON na.materia_id = mc.materia_id AND na.usuario_id = mc.usuario_id
+                ORDER BY mc.anio, mc.nombre;
+            """, (usuario_id, anio_actual, cuatrimestre_actual, usuario_id))
             return cur.fetchall()
 
 def calcular_estado_cursada(cuatrimestre):
@@ -138,7 +164,6 @@ def mostrar(usuario):
 
     st.markdown("---")
 
-    # — Materias cursando este cuatrimestre —
     cuatrimestre_actual = get_cuatrimestre_actual()
     mes_actual = datetime.now().month
     anio_actual = datetime.now().year if mes_actual >= 3 else datetime.now().year - 1

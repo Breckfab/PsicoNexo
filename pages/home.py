@@ -26,7 +26,6 @@ def get_config_cuatrimestre(usuario_id, anio, cuatrimestre):
 
 @st.cache_data(ttl=300)
 def get_todas_configs(usuario_id):
-    """Trae todas las configuraciones del usuario de una sola vez."""
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute("""
@@ -50,9 +49,9 @@ def guardar_config_cuatrimestre(usuario_id, anio, cuatrimestre, fecha_inicio, fe
         conn.commit()
     get_config_cuatrimestre.clear()
     get_todas_configs.clear()
+    get_home_data.clear()
 
 def calcular_progreso_cuatrimestre(fecha_inicio, fecha_fin):
-    """Devuelve (porcentaje 0-100, dias_transcurridos, dias_totales, estado_texto)."""
     hoy = date.today()
     if hoy < fecha_inicio:
         return 0, 0, (fecha_fin - fecha_inicio).days, "No iniciado"
@@ -64,12 +63,19 @@ def calcular_progreso_cuatrimestre(fecha_inicio, fecha_fin):
     dias_restantes = (fecha_fin - hoy).days
     return porcentaje, dias_transcurridos, dias_totales, f"{dias_restantes} días restantes"
 
-# ─── Queries principales ───────────────────────────────────────────────────────
+# ─── Batch query principal — 1 roundtrip para stats + configs ─────────────────
 
 @st.cache_data(ttl=60)
-def get_stats(usuario_id, carrera_id):
+def get_home_data(usuario_id, carrera_id):
+    """
+    Trae en un solo roundtrip:
+      - stats de materias (aprobadas, cursando, regulares, desaprobadas, total)
+      - todas las configuraciones de cuatrimestre del usuario
+    Devuelve: (total, aprobadas, cursando, regulares, desaprobadas, avance, configs_dict)
+    """
     with get_conn() as conn:
         with conn.cursor() as cur:
+            # Stats
             cur.execute("""
                 WITH conteos AS (
                     SELECT
@@ -86,10 +92,23 @@ def get_stats(usuario_id, carrera_id):
                 SELECT t.total, c.aprobadas, c.cursando, c.regulares, c.desaprobadas
                 FROM total t, conteos c;
             """, (usuario_id, carrera_id))
-            row = cur.fetchone()
-    total, aprobadas, cursando, regulares, desaprobadas = row
+            stats_row = cur.fetchone()
+
+            # Configs
+            cur.execute("""
+                SELECT anio, cuatrimestre, fecha_inicio, fecha_fin
+                FROM configuracion_cuatrimestre
+                WHERE usuario_id = %s
+                ORDER BY anio DESC, cuatrimestre;
+            """, (usuario_id,))
+            config_rows = cur.fetchall()
+
+    total, aprobadas, cursando, regulares, desaprobadas = stats_row
     avance = round((aprobadas / total) * 100, 1) if total > 0 else 0
-    return total, aprobadas, cursando, regulares, desaprobadas, avance
+    configs = {(r[0], r[1]): (r[2], r[3]) for r in config_rows}
+    return total, aprobadas, cursando, regulares, desaprobadas, avance, configs
+
+# ─── Queries secundarias ───────────────────────────────────────────────────────
 
 @st.cache_data(ttl=60)
 def get_clases_hoy(usuario_id):
@@ -195,9 +214,7 @@ def calcular_estado_cursada(cuatrimestre):
 
 # ─── Panel de configuración de fechas ─────────────────────────────────────────
 
-def mostrar_config_fechas(usuario_id, anio_actual, cuatrimestre_actual):
-    todas_configs = get_todas_configs(usuario_id)
-
+def mostrar_config_fechas(usuario_id, anio_actual, cuatrimestre_actual, todas_configs):
     config_actual = todas_configs.get((anio_actual, cuatrimestre_actual))
 
     with st.expander("⚙️ Configurar fechas del cuatrimestre", expanded=not config_actual):
@@ -205,7 +222,7 @@ def mostrar_config_fechas(usuario_id, anio_actual, cuatrimestre_actual):
 
         defaults = {
             "1° Cuatrimestre": (date(anio_actual, 3, 17), date(anio_actual, 7, 18)),
-            "2° Cuatrimestre": (date(anio_actual, 8, 4), date(anio_actual, 11, 28)),
+            "2° Cuatrimestre": (date(anio_actual, 8, 4),  date(anio_actual, 11, 28)),
             "Anual":           (date(anio_actual, 3, 17), date(anio_actual, 11, 28)),
         }
 
@@ -294,7 +311,14 @@ def mostrar(usuario):
     st.title("🧠 PsicoNexo")
     st.markdown(f"### Bienvenido/a, {usuario['nombre'].split()[0]} 👋")
 
-    total, aprobadas, cursando, regulares, desaprobadas, avance = get_stats(usuario["id"], usuario["carrera_id"])
+    cuatrimestre_actual = get_cuatrimestre_actual()
+    mes_actual = datetime.now().month
+    anio_actual = datetime.now().year if mes_actual >= 3 else datetime.now().year - 1
+
+    # 1 roundtrip: stats + configs
+    total, aprobadas, cursando, regulares, desaprobadas, avance, todas_configs = get_home_data(
+        usuario["id"], usuario["carrera_id"]
+    )
 
     col1, col2, col3, col4, col5 = st.columns(5)
     with col1:
@@ -314,20 +338,16 @@ def mostrar(usuario):
 
     st.markdown("---")
 
-    cuatrimestre_actual = get_cuatrimestre_actual()
-    mes_actual = datetime.now().month
-    anio_actual = datetime.now().year if mes_actual >= 3 else datetime.now().year - 1
-
-    mostrar_config_fechas(usuario["id"], anio_actual, cuatrimestre_actual)
+    # Panel de config recibe configs ya cargadas — sin roundtrip extra
+    mostrar_config_fechas(usuario["id"], anio_actual, cuatrimestre_actual, todas_configs)
 
     st.markdown("---")
 
     st.markdown(f"### 📚 Cursando — {cuatrimestre_actual} {anio_actual}")
+    # 2do roundtrip: materias + notas
     materias_cursando = get_materias_cursando_con_notas(
         usuario["id"], anio_actual, cuatrimestre_actual
     )
-
-    todas_configs = get_todas_configs(usuario["id"])
 
     if not materias_cursando:
         st.info("No tenés materias registradas para este cuatrimestre.")
@@ -399,6 +419,7 @@ def mostrar(usuario):
 
     with col1:
         st.markdown("### 📅 Hoy")
+        # 3er roundtrip: clases de hoy
         clases_hoy = get_clases_hoy(usuario["id"])
         if clases_hoy:
             for clase in clases_hoy:
@@ -412,6 +433,7 @@ def mostrar(usuario):
 
     with col2:
         st.markdown("### 📌 Tareas pendientes")
+        # 4to roundtrip: tareas
         tareas = get_tareas_pendientes(usuario["id"])
         if tareas:
             hoy = date.today()

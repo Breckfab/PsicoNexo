@@ -12,7 +12,7 @@ COLORES = {
     "desaprobada": "🔴",
 }
 
-@st.cache_data(ttl=60)
+@st.cache_data(ttl=300)
 def get_materias_con_estado(usuario_id, carrera_id):
     with get_conn() as conn:
         with conn.cursor() as cur:
@@ -28,7 +28,7 @@ def get_materias_con_estado(usuario_id, carrera_id):
             """, (usuario_id, carrera_id))
             return cur.fetchall()
 
-@st.cache_data(ttl=120)
+@st.cache_data(ttl=600)
 def get_todas_correlatividades(carrera_id, usuario_id):
     """Trae TODAS las correlatividades de la carrera en una sola query."""
     with get_conn() as conn:

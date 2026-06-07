@@ -136,33 +136,32 @@ def get_materias_cursando_con_notas(usuario_id, anio_actual, cuatrimestre_actual
                         c.dias,
                         c.horario,
                         c.modalidad,
-                        m.id AS materia_id,
+                        m.id         AS materia_id,
                         am.usuario_id
                     FROM alumno_materias am
-                    JOIN materias m ON am.materia_id = m.id
-                    JOIN cursadas c ON c.materia_id = m.id AND c.usuario_id = am.usuario_id
-                    WHERE am.usuario_id = %s
-                      AND am.estado = 'cursando'
-                      AND c.anio_cursada = %s
+                    JOIN materias m  ON am.materia_id = m.id
+                    JOIN cursadas c  ON c.materia_id = m.id AND c.usuario_id = am.usuario_id
+                    WHERE am.usuario_id   = %s
+                      AND am.estado       = 'cursando'
+                      AND c.anio_cursada  = %s
                       AND (c.cuatrimestre = %s OR c.cuatrimestre = 'Anual')
                 ),
-                notas_agg AS (
+                evals_usuario AS (
                     SELECT
-                        e.materia_id,
-                        e.usuario_id,
-                        COUNT(e.id)                                                          AS total_notas,
-                        ROUND(AVG(e.nota)::numeric, 2)                                       AS promedio,
-                        COUNT(e.id) FILTER (WHERE e.aprobado = TRUE)                         AS aprobadas,
-                        COUNT(e.id) FILTER (WHERE e.aprobado = FALSE AND e.nota IS NOT NULL)  AS desaprobadas,
+                        materia_id,
+                        COUNT(id)                                                            AS total_notas,
+                        ROUND(AVG(nota)::numeric, 2)                                         AS promedio,
+                        COUNT(id) FILTER (WHERE aprobado = TRUE)                             AS aprobadas,
+                        COUNT(id) FILTER (WHERE aprobado = FALSE AND nota IS NOT NULL)        AS desaprobadas,
                         STRING_AGG(
-                            CASE WHEN e.nota IS NOT NULL
-                                THEN e.tipo || ': ' || e.nota::text
+                            CASE WHEN nota IS NOT NULL
+                                THEN tipo || ': ' || nota::text
                             END,
-                            ' · ' ORDER BY e.fecha ASC NULLS LAST
+                            ' · ' ORDER BY fecha ASC NULLS LAST
                         ) AS detalle_notas
-                    FROM evaluaciones e
-                    WHERE e.usuario_id = %s
-                    GROUP BY e.materia_id, e.usuario_id
+                    FROM evaluaciones
+                    WHERE usuario_id = %s
+                    GROUP BY materia_id
                 )
                 SELECT
                     mc.nombre,
@@ -173,14 +172,13 @@ def get_materias_cursando_con_notas(usuario_id, anio_actual, cuatrimestre_actual
                     mc.dias,
                     mc.horario,
                     mc.modalidad,
-                    COALESCE(na.total_notas, 0)  AS total_notas,
-                    na.promedio,
-                    COALESCE(na.aprobadas, 0)    AS aprobadas,
-                    COALESCE(na.desaprobadas, 0) AS desaprobadas,
-                    na.detalle_notas
+                    COALESCE(ev.total_notas, 0)  AS total_notas,
+                    ev.promedio,
+                    COALESCE(ev.aprobadas, 0)    AS aprobadas,
+                    COALESCE(ev.desaprobadas, 0) AS desaprobadas,
+                    ev.detalle_notas
                 FROM materias_cursando mc
-                LEFT JOIN notas_agg na
-                    ON na.materia_id = mc.materia_id AND na.usuario_id = mc.usuario_id
+                LEFT JOIN evals_usuario ev ON ev.materia_id = mc.materia_id
                 ORDER BY mc.anio, mc.nombre;
             """, (usuario_id, anio_actual, cuatrimestre_actual, usuario_id))
             return cur.fetchall()
@@ -200,17 +198,11 @@ def calcular_estado_cursada(cuatrimestre):
 def mostrar_config_fechas(usuario_id, anio_actual, cuatrimestre_actual):
     todas_configs = get_todas_configs(usuario_id)
 
-    # Detectar cuatrimestres activos para este alumno (los que tiene cursadas)
-    cuatris_para_config = []
     config_actual = todas_configs.get((anio_actual, cuatrimestre_actual))
-    if cuatrimestre_actual != "Anual":
-        cuatris_para_config.append((anio_actual, cuatrimestre_actual))
-    cuatris_para_config.append((anio_actual, "Anual"))
 
     with st.expander("⚙️ Configurar fechas del cuatrimestre", expanded=not config_actual):
         st.caption("Definí las fechas de inicio y fin para calcular el progreso de cada materia.")
 
-        # Valores por defecto según cuatrimestre
         defaults = {
             "1° Cuatrimestre": (date(anio_actual, 3, 17), date(anio_actual, 7, 18)),
             "2° Cuatrimestre": (date(anio_actual, 8, 4), date(anio_actual, 11, 28)),
@@ -259,13 +251,10 @@ def mostrar_config_fechas(usuario_id, anio_actual, cuatrimestre_actual):
                 st.success(f"✅ Fechas guardadas: {fecha_ini.strftime('%d/%m/%Y')} → {fecha_fin.strftime('%d/%m/%Y')}")
                 st.rerun()
 
-        # Mostrar configuraciones guardadas
         if todas_configs:
             st.markdown("**Configuraciones guardadas:**")
             for (anio_c, cuatri_c), (fi, ff) in sorted(todas_configs.items(), reverse=True):
-                col_info, col_edit = st.columns([4, 1])
-                with col_info:
-                    st.caption(f"📅 {cuatri_c} {anio_c}: {fi.strftime('%d/%m/%Y')} → {ff.strftime('%d/%m/%Y')}")
+                st.caption(f"📅 {cuatri_c} {anio_c}: {fi.strftime('%d/%m/%Y')} → {ff.strftime('%d/%m/%Y')}")
 
 # ─── Barra de progreso de cuatrimestre ────────────────────────────────────────
 
@@ -329,7 +318,6 @@ def mostrar(usuario):
     mes_actual = datetime.now().month
     anio_actual = datetime.now().year if mes_actual >= 3 else datetime.now().year - 1
 
-    # Panel de configuración de fechas
     mostrar_config_fechas(usuario["id"], anio_actual, cuatrimestre_actual)
 
     st.markdown("---")
@@ -339,7 +327,6 @@ def mostrar(usuario):
         usuario["id"], anio_actual, cuatrimestre_actual
     )
 
-    # Traer todas las configs una sola vez para usarlas en cada materia
     todas_configs = get_todas_configs(usuario["id"])
 
     if not materias_cursando:
@@ -371,7 +358,6 @@ def mostrar(usuario):
                         unsafe_allow_html=True
                     )
 
-                # Barra de progreso temporal del cuatrimestre
                 mostrar_barra_cuatrimestre(mcuatri, manio_cursada, todas_configs)
 
                 st.markdown("**Notas cargadas:**")

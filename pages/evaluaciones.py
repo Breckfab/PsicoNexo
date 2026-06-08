@@ -120,15 +120,11 @@ def mostrar(usuario):
                 st.info(f"No hay {tipo.lower()}s cargados.")
 
             with st.expander(f"➕ Agregar {tipo}"):
-                key_form = f"nota_input_{tipo.replace(' ', '_')}"
                 with st.form(f"form_{tipo.replace(' ', '_')}"):
                     descripcion = st.text_input("Descripción (ej: Parcial 1, TP N°2)")
                     nota = st.number_input("Nota", min_value=0.0, max_value=10.0, step=0.25, value=0.0)
                     fecha = st.date_input("Fecha", value=date.today())
-                    # FIX v6: el checkbox ya no depende de `nota` (que siempre es 0.0 al renderizar).
-                    # El usuario lo marca manualmente; se sugiere con un caption orientativo.
-                    aprobado = st.checkbox("¿Aprobado?", value=False)
-                    st.caption("✏️ Marcá la casilla si la nota es aprobatoria (≥ 6).")
+                    aprobado = st.checkbox("¿Aprobado? (marcá si la nota es ≥ 6)", value=False)
                     submit = st.form_submit_button("💾 Guardar", use_container_width=True)
                 if submit:
                     agregar_evaluacion(usuario["id"], materia_id, tipo, descripcion, nota, fecha, aprobado)

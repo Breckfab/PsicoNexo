@@ -46,6 +46,9 @@ def eliminar_evaluacion(eval_id):
     get_evaluaciones.clear()
 
 def mostrar(usuario):
+    if not usuario:
+        st.switch_page("app.py")
+        return
     st.title("📝 Notas y Evaluaciones")
 
     nombres_anio = {1: "1° Año", 2: "2° Año", 3: "3° Año", 4: "4° Año", 5: "5° Año"}

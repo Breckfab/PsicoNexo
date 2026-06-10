@@ -150,6 +150,10 @@ def convertir_link_drive(link):
     return None
 
 def mostrar(usuario):
+    if not usuario:
+        st.switch_page("app.py")
+        return
+
     st.title("🗓️ Cursadas")
 
     clases_hoy = get_clases_hoy(usuario["id"])
@@ -329,13 +333,10 @@ def mostrar(usuario):
             tareas_dict = {t[1]: t for t in tareas}
             hoy = date.today()
 
-            # Tareas existentes
             nums_existentes = sorted(tareas_dict.keys())
-            # Próximo número disponible
             todos_nums = list(range(1, max(nums_existentes) + 2)) if nums_existentes else [1]
-            nums_a_mostrar = nums_existentes + [max(todos_nums)]  # existentes + 1 nueva
+            nums_a_mostrar = nums_existentes + [max(todos_nums)]
 
-            # Mostrar todas las tareas existentes
             for num in nums_existentes:
                 tarea = tareas_dict[num]
                 with st.expander(f"📌 Tarea {num}", expanded=True):
@@ -389,7 +390,6 @@ def mostrar(usuario):
                                     st.session_state[f"editando_tarea_{num}_{materia_tarea_id}"] = False
                                     st.rerun()
 
-            # Siempre mostrar formulario para agregar nueva tarea
             nuevo_num = (max(nums_existentes) + 1) if nums_existentes else 1
             st.markdown("---")
             with st.expander(f"➕ Agregar Tarea {nuevo_num}", expanded=False):

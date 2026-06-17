@@ -145,6 +145,10 @@ def generar_pdf(historial, nombre_alumno, filtros):
     return buffer
 
 def mostrar(usuario):
+    if not usuario:
+        st.switch_page("app.py")
+        return
+
     st.title("📜 Historial Académico")
     st.caption("Licenciatura en Psicología — UdeMM")
 

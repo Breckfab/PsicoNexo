@@ -63,19 +63,12 @@ def calcular_progreso_cuatrimestre(fecha_inicio, fecha_fin):
     dias_restantes = (fecha_fin - hoy).days
     return porcentaje, dias_transcurridos, dias_totales, f"{dias_restantes} días restantes"
 
-# ─── Batch query principal — 1 roundtrip para stats + configs ─────────────────
+# ─── Batch query principal ─────────────────────────────────────────────────────
 
 @st.cache_data(ttl=60)
 def get_home_data(usuario_id, carrera_id):
-    """
-    Trae en un solo roundtrip:
-      - stats de materias (aprobadas, cursando, regulares, desaprobadas, total)
-      - todas las configuraciones de cuatrimestre del usuario
-    Devuelve: (total, aprobadas, cursando, regulares, desaprobadas, avance, configs_dict)
-    """
     with get_conn() as conn:
         with conn.cursor() as cur:
-            # Stats
             cur.execute("""
                 WITH conteos AS (
                     SELECT
@@ -94,7 +87,6 @@ def get_home_data(usuario_id, carrera_id):
             """, (usuario_id, carrera_id))
             stats_row = cur.fetchone()
 
-            # Configs
             cur.execute("""
                 SELECT anio, cuatrimestre, fecha_inicio, fecha_fin
                 FROM configuracion_cuatrimestre
@@ -147,16 +139,9 @@ def get_materias_cursando_con_notas(usuario_id, anio_actual, cuatrimestre_actual
             cur.execute("""
                 WITH materias_cursando AS (
                     SELECT
-                        m.nombre,
-                        m.anio,
-                        c.cuatrimestre,
-                        c.anio_cursada,
-                        c.profesor1,
-                        c.dias,
-                        c.horario,
-                        c.modalidad,
-                        m.id         AS materia_id,
-                        am.usuario_id
+                        m.nombre, m.anio, c.cuatrimestre, c.anio_cursada,
+                        c.profesor1, c.dias, c.horario, c.modalidad,
+                        m.id AS materia_id, am.usuario_id
                     FROM alumno_materias am
                     JOIN materias m  ON am.materia_id = m.id
                     JOIN cursadas c  ON c.materia_id = m.id AND c.usuario_id = am.usuario_id
@@ -168,10 +153,10 @@ def get_materias_cursando_con_notas(usuario_id, anio_actual, cuatrimestre_actual
                 evals_usuario AS (
                     SELECT
                         materia_id,
-                        COUNT(id)                                                            AS total_notas,
-                        ROUND(AVG(nota)::numeric, 2)                                         AS promedio,
-                        COUNT(id) FILTER (WHERE aprobado = TRUE)                             AS aprobadas,
-                        COUNT(id) FILTER (WHERE aprobado = FALSE AND nota IS NOT NULL)        AS desaprobadas,
+                        COUNT(id)                                                             AS total_notas,
+                        ROUND(AVG(nota)::numeric, 2)                                          AS promedio,
+                        COUNT(id) FILTER (WHERE aprobado = TRUE)                              AS aprobadas,
+                        COUNT(id) FILTER (WHERE aprobado = FALSE AND nota IS NOT NULL)         AS desaprobadas,
                         STRING_AGG(
                             CASE WHEN nota IS NOT NULL
                                 THEN tipo || ': ' || nota::text
@@ -183,15 +168,9 @@ def get_materias_cursando_con_notas(usuario_id, anio_actual, cuatrimestre_actual
                     GROUP BY materia_id
                 )
                 SELECT
-                    mc.nombre,
-                    mc.anio,
-                    mc.cuatrimestre,
-                    mc.anio_cursada,
-                    mc.profesor1,
-                    mc.dias,
-                    mc.horario,
-                    mc.modalidad,
-                    COALESCE(ev.total_notas, 0)  AS total_notas,
+                    mc.nombre, mc.anio, mc.cuatrimestre, mc.anio_cursada,
+                    mc.profesor1, mc.dias, mc.horario, mc.modalidad,
+                    COALESCE(ev.total_notas, 0) AS total_notas,
                     ev.promedio,
                     COALESCE(ev.aprobadas, 0)    AS aprobadas,
                     COALESCE(ev.desaprobadas, 0) AS desaprobadas,
@@ -211,6 +190,51 @@ def calcular_estado_cursada(cuatrimestre):
     elif cuatrimestre == "2° Cuatrimestre":
         return "En curso" if 8 <= mes <= 12 else "Finalizada"
     return "En curso"
+
+# ─── Alertas de vencimiento ────────────────────────────────────────────────────
+
+def mostrar_alertas_vencimiento(tareas):
+    """Muestra banners de alerta para tareas vencidas o próximas a vencer (≤ 3 días)."""
+    if not tareas:
+        return
+
+    hoy = date.today()
+    limite = hoy + timedelta(days=3)
+
+    vencidas   = [(t) for t in tareas if t[2] and t[2] < hoy]
+    proximas   = [(t) for t in tareas if t[2] and hoy <= t[2] <= limite]
+
+    if not vencidas and not proximas:
+        return
+
+    if vencidas:
+        with st.container():
+            msgs = []
+            for t in vencidas:
+                tnum, tdesc, tvenc, mnom = t
+                msgs.append(f"**Tarea {tnum}** de *{mnom}* — venció el {tvenc.strftime('%d/%m')}")
+            st.error(
+                "🔴 **Tareas vencidas:**\n\n" + "\n\n".join(f"• {m}" for m in msgs),
+                icon="⚠️"
+            )
+
+    if proximas:
+        with st.container():
+            msgs = []
+            for t in proximas:
+                tnum, tdesc, tvenc, mnom = t
+                dias_restantes = (tvenc - hoy).days
+                if dias_restantes == 0:
+                    cuando = "**hoy**"
+                elif dias_restantes == 1:
+                    cuando = "**mañana**"
+                else:
+                    cuando = f"en **{dias_restantes} días** ({tvenc.strftime('%d/%m')})"
+                msgs.append(f"**Tarea {tnum}** de *{mnom}* — vence {cuando}")
+            st.warning(
+                "⏰ **Tareas por vencer:**\n\n" + "\n\n".join(f"• {m}" for m in msgs),
+                icon="📅"
+            )
 
 # ─── Panel de configuración de fechas ─────────────────────────────────────────
 
@@ -315,7 +339,11 @@ def mostrar(usuario):
     mes_actual = datetime.now().month
     anio_actual = datetime.now().year if mes_actual >= 3 else datetime.now().year - 1
 
-    # 1 roundtrip: stats + configs
+    # Tareas pendientes — se cargan primero para mostrar alertas arriba del todo
+    tareas = get_tareas_pendientes(usuario["id"])
+    mostrar_alertas_vencimiento(tareas)
+
+    # Stats + configs en 1 roundtrip
     total, aprobadas, cursando, regulares, desaprobadas, avance, todas_configs = get_home_data(
         usuario["id"], usuario["carrera_id"]
     )
@@ -338,13 +366,11 @@ def mostrar(usuario):
 
     st.markdown("---")
 
-    # Panel de config recibe configs ya cargadas — sin roundtrip extra
     mostrar_config_fechas(usuario["id"], anio_actual, cuatrimestre_actual, todas_configs)
 
     st.markdown("---")
 
     st.markdown(f"### 📚 Cursando — {cuatrimestre_actual} {anio_actual}")
-    # 2do roundtrip: materias + notas
     materias_cursando = get_materias_cursando_con_notas(
         usuario["id"], anio_actual, cuatrimestre_actual
     )
@@ -419,7 +445,6 @@ def mostrar(usuario):
 
     with col1:
         st.markdown("### 📅 Hoy")
-        # 3er roundtrip: clases de hoy
         clases_hoy = get_clases_hoy(usuario["id"])
         if clases_hoy:
             for clase in clases_hoy:
@@ -433,14 +458,18 @@ def mostrar(usuario):
 
     with col2:
         st.markdown("### 📌 Tareas pendientes")
-        # 4to roundtrip: tareas
-        tareas = get_tareas_pendientes(usuario["id"])
         if tareas:
             hoy = date.today()
             for t in tareas:
                 tnum, tdesc, tvenc, mnom = t
                 vencida = tvenc and tvenc < hoy
-                icono = "🔴" if vencida else "⏳"
+                proxima = tvenc and hoy <= tvenc <= hoy + timedelta(days=3)
+                if vencida:
+                    icono = "🔴"
+                elif proxima:
+                    icono = "⚠️"
+                else:
+                    icono = "⏳"
                 venc_text = str(tvenc) if tvenc else "Sin fecha"
                 st.markdown(f"{icono} **Tarea {tnum}** — {mnom}")
                 st.caption(f"{tdesc or 'Sin descripción'} — Vence: {venc_text}")

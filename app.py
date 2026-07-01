@@ -203,7 +203,7 @@ def mostrar_navbar(usuario):
         </div>
     """, unsafe_allow_html=True)
 
-    items = ["🏠 Inicio", "📚 Plan de Estudios", "🗓️ Cursadas", "📝 Notas", "📂 Recursos", "⭐ Profesores", "👤 Mi Perfil"]
+    items = ["🏠 Inicio", "📚 Plan de Estudios", "🗓️ Cursadas", "📝 Notas", "📂 Recursos", "⭐ Profesores", "📊 Estadísticas", "👤 Mi Perfil"]
     if usuario.get("es_admin"):
         items.append("🔧 Administración")
 
@@ -214,6 +214,7 @@ def mostrar_navbar(usuario):
         "📝 Notas": "evaluaciones",
         "📂 Recursos": "recursos",
         "⭐ Profesores": "profesores",
+        "📊 Estadísticas": "estadisticas",
         "👤 Mi Perfil": "perfil",
         "🔧 Administración": "admin",
     }
@@ -227,37 +228,3 @@ def mostrar_navbar(usuario):
 
 def mostrar_app():
     usuario = st.session_state.usuario
-    mostrar_sidebar(usuario)
-    mostrar_navbar(usuario)
-
-    if st.session_state.pagina == "materias":
-        from pages import materias
-        materias.mostrar(usuario)
-    elif st.session_state.pagina == "cursadas":
-        from pages import cursadas
-        cursadas.mostrar(usuario)
-    elif st.session_state.pagina == "evaluaciones":
-        from pages import evaluaciones
-        evaluaciones.mostrar(usuario)
-    elif st.session_state.pagina == "recursos":
-        from pages import recursos
-        recursos.mostrar(usuario)
-    elif st.session_state.pagina == "perfil":
-        from pages import perfil
-        perfil.mostrar(usuario)
-    elif st.session_state.pagina == "profesores":
-        from pages import profesores
-        profesores.mostrar(usuario)
-    elif st.session_state.pagina == "admin":
-        mostrar_admin()
-    else:
-        from pages import home
-        home.mostrar(usuario)
-
-if st.session_state.usuario is None:
-    if st.session_state.pagina == "registro":
-        mostrar_registro()
-    else:
-        mostrar_login()
-else:
-    mostrar_app()

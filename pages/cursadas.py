@@ -1,11 +1,13 @@
 import streamlit as st
 from db import get_conn
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 
 MODALIDADES = ["Presencial", "Híbrida", "Asincrónica"]
 TURNOS = ["Mañana", "Tarde", "Noche"]
 CUATRIMESTRES = ["1° Cuatrimestre", "2° Cuatrimestre", "Anual"]
 DIAS = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado"]
+
+DIA_INDEX = {"Lunes": 0, "Martes": 1, "Miércoles": 2, "Jueves": 3, "Viernes": 4, "Sábado": 5, "Domingo": 6}
 
 @st.cache_data(ttl=60)
 def get_materias_cursando(usuario_id, carrera_id):
@@ -149,6 +151,172 @@ def convertir_link_drive(link):
             return None
     return None
 
+# ─── Asistencia ────────────────────────────────────────────────────────────
+
+@st.cache_data(ttl=60)
+def get_config_cuatrimestre_materia(usuario_id, anio, cuatrimestre):
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT fecha_inicio, fecha_fin
+                FROM configuracion_cuatrimestre
+                WHERE usuario_id = %s AND anio = %s AND cuatrimestre = %s;
+            """, (usuario_id, anio, cuatrimestre))
+            return cur.fetchone()
+
+@st.cache_data(ttl=60)
+def get_faltas_materia(usuario_id, materia_id):
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT id, fecha, justificada
+                FROM asistencias
+                WHERE usuario_id = %s AND materia_id = %s
+                ORDER BY fecha DESC;
+            """, (usuario_id, materia_id))
+            return cur.fetchall()
+
+def agregar_falta(usuario_id, materia_id, fecha, justificada=False):
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO asistencias (usuario_id, materia_id, fecha, justificada)
+                VALUES (%s, %s, %s, %s)
+                ON CONFLICT (usuario_id, materia_id, fecha)
+                DO UPDATE SET justificada = EXCLUDED.justificada;
+            """, (usuario_id, materia_id, fecha, justificada))
+        conn.commit()
+    get_faltas_materia.clear()
+
+def borrar_falta(falta_id):
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM asistencias WHERE id = %s;", (falta_id,))
+        conn.commit()
+    get_faltas_materia.clear()
+
+def contar_clases_en_rango(dias_str, fecha_inicio, fecha_fin):
+    """Cuenta cuántas veces caen los días de cursada dentro del rango de fechas (feriados no se descuentan)."""
+    if not dias_str or not fecha_inicio or not fecha_fin or fecha_fin < fecha_inicio:
+        return 0
+    dias_lista = [d.strip() for d in dias_str.split(",") if d.strip()]
+    indices = {DIA_INDEX[d] for d in dias_lista if d in DIA_INDEX}
+    if not indices:
+        return 0
+    total = 0
+    fecha = fecha_inicio
+    while fecha <= fecha_fin:
+        if fecha.weekday() in indices:
+            total += 1
+        fecha += timedelta(days=1)
+    return total
+
+def clasificar_asistencia(porcentaje):
+    """Devuelve (color, negrita) según qué tan cerca está el alumno del límite del 75%."""
+    if porcentaje >= 85:
+        return "#2ecc71", False
+    elif porcentaje >= 75:
+        return "#f0c000", True
+    else:
+        return "#e74c3c", True
+
+def calcular_asistencia(usuario_id, materia_id, dias_str, anio_cursada, cuatrimestre):
+    config = get_config_cuatrimestre_materia(usuario_id, anio_cursada, cuatrimestre)
+    if not config:
+        return None
+    fecha_inicio, fecha_fin = config
+    clases_totales = contar_clases_en_rango(dias_str, fecha_inicio, fecha_fin)
+    if clases_totales == 0:
+        return None
+    faltas = get_faltas_materia(usuario_id, materia_id)
+    cantidad_faltas = len(faltas)
+    porcentaje = round(((clases_totales - cantidad_faltas) / clases_totales) * 100, 1)
+    max_faltas_permitidas = int(clases_totales * 0.25)
+    faltas_restantes = max_faltas_permitidas - cantidad_faltas
+    return {
+        "clases_totales": clases_totales,
+        "faltas": cantidad_faltas,
+        "porcentaje": porcentaje,
+        "faltas_restantes": faltas_restantes,
+        "max_faltas_permitidas": max_faltas_permitidas,
+        "detalle_faltas": faltas,
+    }
+
+def mostrar_asistencia(usuario, mid, dias, anio, cuatri):
+    st.markdown("---")
+    st.markdown("#### 📅 Asistencia")
+
+    stats = calcular_asistencia(usuario["id"], mid, dias, anio, cuatri)
+
+    if stats is None:
+        st.caption("⚙️ Configurá las fechas de este cuatrimestre en Inicio para calcular la asistencia.")
+        return
+
+    porcentaje = stats["porcentaje"]
+    color, negrita = clasificar_asistencia(porcentaje)
+    peso = "bold" if negrita else "normal"
+    restantes = max(stats["faltas_restantes"], 0)
+
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.markdown(
+            f"<div style='text-align:center;'><div style='font-size:11px; color:#aaa;'>Asistencia</div>"
+            f"<div style='font-size:26px; font-weight:{peso}; color:{color};'>{porcentaje}%</div></div>",
+            unsafe_allow_html=True
+        )
+    with col2:
+        st.markdown(
+            f"<div style='text-align:center;'><div style='font-size:11px; color:#aaa;'>Faltas usadas</div>"
+            f"<div style='font-size:20px; font-weight:bold;'>{stats['faltas']} / {stats['max_faltas_permitidas']}</div></div>",
+            unsafe_allow_html=True
+        )
+    with col3:
+        st.markdown(
+            f"<div style='text-align:center;'><div style='font-size:11px; color:#aaa;'>Podés faltar</div>"
+            f"<div style='font-size:20px; font-weight:{peso}; color:{color};'>{restantes} clase(s) más</div></div>",
+            unsafe_allow_html=True
+        )
+
+    if porcentaje < 75:
+        st.markdown(
+            f"<p style='color:{color}; font-weight:bold; text-align:center; margin-top:8px;'>"
+            f"🚨 ¡Estás en riesgo de quedar libre por inasistencias!</p>",
+            unsafe_allow_html=True
+        )
+    elif porcentaje < 85:
+        st.markdown(
+            f"<p style='color:{color}; font-weight:bold; text-align:center; margin-top:8px;'>"
+            f"⚠️ Te estás acercando al límite de inasistencias.</p>",
+            unsafe_allow_html=True
+        )
+
+    with st.expander("📋 Marcar falta / ver faltas registradas"):
+        with st.form(f"form_falta_{mid}"):
+            col_f1, col_f2 = st.columns(2)
+            with col_f1:
+                fecha_falta = st.date_input("Fecha de la falta", value=date.today(), key=f"fecha_falta_{mid}")
+            with col_f2:
+                justificada = st.checkbox("¿Justificada?", key=f"just_falta_{mid}")
+            agregar = st.form_submit_button("➕ Marcar falta", use_container_width=True)
+        if agregar:
+            agregar_falta(usuario["id"], mid, fecha_falta, justificada)
+            st.success("Falta registrada.")
+            st.rerun()
+
+        if stats["detalle_faltas"]:
+            st.markdown("**Faltas registradas:**")
+            for fid, ffecha, fjust in stats["detalle_faltas"]:
+                just_text = " · justificada" if fjust else ""
+                col_ff1, col_ff2 = st.columns([4, 1])
+                with col_ff1:
+                    st.markdown(f"📌 {ffecha.strftime('%d/%m/%Y')}{just_text}")
+                with col_ff2:
+                    if st.button("🗑️", key=f"del_falta_{fid}", use_container_width=True):
+                        borrar_falta(fid)
+                        st.rerun()
+        else:
+            st.caption("No hay faltas registradas todavía. Por defecto se asume presente en todas las clases.")
+
 def mostrar(usuario):
     if not usuario:
         st.switch_page("app.py")
@@ -221,6 +389,10 @@ def mostrar(usuario):
                             if st.session_state.get(f"viendo_pdf_cursada_{mid}") and convertir_link_drive(programa_link):
                                 st.components.v1.iframe(convertir_link_drive(programa_link), height=500)
 
+                        # ── Sección de asistencia ─────────────────────────
+                        mostrar_asistencia(usuario, mid, dias, anio, cuatri)
+
+                        st.markdown("---")
                         col_edit, col_borrar = st.columns(2)
                         with col_edit:
                             if st.button("✏️ Editar", key=f"edit_cursada_{mid}", use_container_width=True):

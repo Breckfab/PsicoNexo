@@ -2,6 +2,8 @@ import streamlit as st
 from db import get_conn
 from datetime import datetime, date, timedelta
 
+DIA_INDEX = {"Lunes": 0, "Martes": 1, "Miércoles": 2, "Jueves": 3, "Viernes": 4, "Sábado": 5, "Domingo": 6}
+
 def get_cuatrimestre_actual():
     mes = datetime.now().month
     if 3 <= mes <= 7:
@@ -62,6 +64,45 @@ def calcular_progreso_cuatrimestre(fecha_inicio, fecha_fin):
     porcentaje = round((dias_transcurridos / dias_totales) * 100, 1) if dias_totales > 0 else 0
     dias_restantes = (fecha_fin - hoy).days
     return porcentaje, dias_transcurridos, dias_totales, f"{dias_restantes} días restantes"
+
+# ─── Asistencia ────────────────────────────────────────────────────────────
+
+@st.cache_data(ttl=60)
+def get_faltas_por_materia(usuario_id):
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT materia_id, COUNT(*)
+                FROM asistencias
+                WHERE usuario_id = %s
+                GROUP BY materia_id;
+            """, (usuario_id,))
+            return {r[0]: r[1] for r in cur.fetchall()}
+
+def contar_clases_en_rango(dias_str, fecha_inicio, fecha_fin):
+    """Cuenta cuántas veces caen los días de cursada dentro del rango de fechas (feriados no se descuentan)."""
+    if not dias_str or not fecha_inicio or not fecha_fin or fecha_fin < fecha_inicio:
+        return 0
+    dias_lista = [d.strip() for d in dias_str.split(",") if d.strip()]
+    indices = {DIA_INDEX[d] for d in dias_lista if d in DIA_INDEX}
+    if not indices:
+        return 0
+    total = 0
+    fecha = fecha_inicio
+    while fecha <= fecha_fin:
+        if fecha.weekday() in indices:
+            total += 1
+        fecha += timedelta(days=1)
+    return total
+
+def clasificar_asistencia(porcentaje):
+    """Devuelve (color, negrita) según qué tan cerca está el alumno del límite del 75%."""
+    if porcentaje >= 85:
+        return "#2ecc71", False
+    elif porcentaje >= 75:
+        return "#f0c000", True
+    else:
+        return "#e74c3c", True
 
 # ─── Batch query principal ─────────────────────────────────────────────────────
 
@@ -169,7 +210,7 @@ def get_materias_cursando_con_notas(usuario_id, anio_actual, cuatrimestre_actual
                 )
                 SELECT
                     mc.nombre, mc.anio, mc.cuatrimestre, mc.anio_cursada,
-                    mc.profesor1, mc.dias, mc.horario, mc.modalidad,
+                    mc.profesor1, mc.dias, mc.horario, mc.modalidad, mc.materia_id,
                     COALESCE(ev.total_notas, 0) AS total_notas,
                     ev.promedio,
                     COALESCE(ev.aprobadas, 0)    AS aprobadas,
@@ -329,6 +370,39 @@ def mostrar_barra_cuatrimestre(cuatrimestre, anio_cursada, todas_configs):
         unsafe_allow_html=True
     )
 
+def mostrar_chip_asistencia(mdias, manio_cursada, mcuatri, mid, todas_configs, faltas_map):
+    config_asist = todas_configs.get((manio_cursada, mcuatri))
+    if not config_asist:
+        return
+
+    fecha_ini_a, fecha_fin_a = config_asist
+    clases_totales = contar_clases_en_rango(mdias, fecha_ini_a, fecha_fin_a)
+    if clases_totales == 0:
+        return
+
+    faltas_mat = faltas_map.get(mid, 0)
+    porcentaje_asist = round(((clases_totales - faltas_mat) / clases_totales) * 100, 1)
+    max_faltas = int(clases_totales * 0.25)
+    restantes = max(max_faltas - faltas_mat, 0)
+    color_a, negrita_a = clasificar_asistencia(porcentaje_asist)
+    peso_a = "bold" if negrita_a else "normal"
+
+    st.markdown(
+        f"<div style='margin-top:6px; font-size:12px;'>"
+        f"📅 Asistencia: <span style='color:{color_a}; font-weight:{peso_a};'>{porcentaje_asist}%</span>"
+        f" — Podés faltar <span style='color:{color_a}; font-weight:{peso_a};'>{restantes}</span> clase(s) más"
+        f" ({faltas_mat}/{max_faltas} usadas)"
+        f"</div>",
+        unsafe_allow_html=True
+    )
+
+    if porcentaje_asist < 85:
+        alerta_txt = "🚨 ¡Riesgo de quedar libre por inasistencias!" if porcentaje_asist < 75 else "⚠️ Te estás acercando al límite de faltas."
+        st.markdown(
+            f"<div style='color:{color_a}; font-weight:bold; font-size:12px; margin-top:2px;'>{alerta_txt}</div>",
+            unsafe_allow_html=True
+        )
+
 # ─── Vista principal ───────────────────────────────────────────────────────────
 
 def mostrar(usuario):
@@ -374,13 +448,14 @@ def mostrar(usuario):
     materias_cursando = get_materias_cursando_con_notas(
         usuario["id"], anio_actual, cuatrimestre_actual
     )
+    faltas_map = get_faltas_por_materia(usuario["id"])
 
     if not materias_cursando:
         st.info("No tenés materias registradas para este cuatrimestre.")
     else:
         for m in materias_cursando:
             (mnombre, manio, mcuatri, manio_cursada, mprofesor,
-             mdias, mhorario, mmodalidad, total_notas,
+             mdias, mhorario, mmodalidad, mid, total_notas,
              promedio, aprobadas_ev, desaprobadas_ev, detalle_notas) = m
 
             estado = calcular_estado_cursada(mcuatri)
@@ -405,6 +480,7 @@ def mostrar(usuario):
                     )
 
                 mostrar_barra_cuatrimestre(mcuatri, manio_cursada, todas_configs)
+                mostrar_chip_asistencia(mdias, manio_cursada, mcuatri, mid, todas_configs, faltas_map)
 
                 st.markdown("**Notas cargadas:**")
                 if total_notas and int(total_notas) > 0:

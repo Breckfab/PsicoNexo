@@ -3,6 +3,7 @@ from db import init_db, crear_admin_si_no_existe
 from auth import login_user, register_user, logout, get_carreras, generar_codigo, get_codigos
 import calendar
 from datetime import datetime
+from pages import home, materias, cursadas, evaluaciones, recursos, profesores, estadisticas, perfil
 
 st.set_page_config(page_title="PsicoNexo", page_icon="Psicologia_favicon_png.png", layout="wide")
 
@@ -228,3 +229,38 @@ def mostrar_navbar(usuario):
 
 def mostrar_app():
     usuario = st.session_state.usuario
+
+    mostrar_sidebar(usuario)
+    mostrar_navbar(usuario)
+
+    pagina = st.session_state.pagina
+
+    if pagina == "home":
+        home.mostrar(usuario)
+    elif pagina == "materias":
+        materias.mostrar(usuario)
+    elif pagina == "cursadas":
+        cursadas.mostrar(usuario)
+    elif pagina == "evaluaciones":
+        evaluaciones.mostrar(usuario)
+    elif pagina == "recursos":
+        recursos.mostrar(usuario)
+    elif pagina == "profesores":
+        profesores.mostrar(usuario)
+    elif pagina == "estadisticas":
+        estadisticas.mostrar(usuario)
+    elif pagina == "perfil":
+        perfil.mostrar(usuario)
+    elif pagina == "admin" and usuario.get("es_admin"):
+        mostrar_admin()
+    else:
+        home.mostrar(usuario)
+
+# ── Punto de entrada principal ─────────────────────────────────────────────
+if st.session_state.usuario is None:
+    if st.session_state.pagina == "registro":
+        mostrar_registro()
+    else:
+        mostrar_login()
+else:
+    mostrar_app()

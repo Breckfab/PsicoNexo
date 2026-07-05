@@ -159,6 +159,18 @@ def init_db():
     """)
 
     cur.execute("""
+        CREATE TABLE IF NOT EXISTS asistencias (
+            id SERIAL PRIMARY KEY,
+            usuario_id INTEGER REFERENCES usuarios(id),
+            materia_id INTEGER REFERENCES materias(id),
+            fecha DATE NOT NULL,
+            justificada BOOLEAN DEFAULT FALSE,
+            created_at TIMESTAMP DEFAULT NOW(),
+            UNIQUE(usuario_id, materia_id, fecha)
+        );
+    """)
+
+    cur.execute("""
         CREATE TABLE IF NOT EXISTS opiniones_profesores (
             id SERIAL PRIMARY KEY,
             usuario_id INTEGER REFERENCES usuarios(id),

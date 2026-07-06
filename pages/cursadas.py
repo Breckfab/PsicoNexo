@@ -246,12 +246,26 @@ def mostrar_asistencia(usuario, mid, dias, anio, cuatri):
     st.markdown("---")
     st.markdown("#### 📅 Asistencia")
 
-    stats = calcular_asistencia(usuario["id"], mid, dias, anio, cuatri)
-
-    if stats is None:
-        st.caption("⚙️ Configurá las fechas de este cuatrimestre en Inicio para calcular la asistencia.")
+    # ── Diagnóstico paso a paso (nunca se queda mudo) ─────────────────
+    config = get_config_cuatrimestre_materia(usuario["id"], anio, cuatri)
+    if not config:
+        st.caption(
+            f"⚙️ No encontré fechas configuradas para **{cuatri} {anio}**. "
+            f"Andá a Inicio → '⚙️ Configurar fechas del cuatrimestre', elegí ese cuatrimestre y ese año, y guardalas."
+        )
         return
 
+    fecha_inicio, fecha_fin = config
+    clases_totales = contar_clases_en_rango(dias, fecha_inicio, fecha_fin)
+    if clases_totales == 0:
+        st.caption(
+            f"📅 No pude calcular clases. Días cargados: **'{dias or '—'}'** · "
+            f"Rango configurado: {fecha_inicio.strftime('%d/%m/%Y')} → {fecha_fin.strftime('%d/%m/%Y')}. "
+            f"Revisá que los días de cursada estén cargados en esta materia (editar cursada → Días)."
+        )
+        return
+
+    stats = calcular_asistencia(usuario["id"], mid, dias, anio, cuatri)
     porcentaje = stats["porcentaje"]
     color, negrita = clasificar_asistencia(porcentaje)
     peso = "bold" if negrita else "normal"

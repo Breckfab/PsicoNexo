@@ -373,11 +373,20 @@ def mostrar_barra_cuatrimestre(cuatrimestre, anio_cursada, todas_configs):
 def mostrar_chip_asistencia(mdias, manio_cursada, mcuatri, mid, todas_configs, faltas_map):
     config_asist = todas_configs.get((manio_cursada, mcuatri))
     if not config_asist:
+        st.caption(
+            f"⚙️ No encontré fechas configuradas para **{mcuatri} {manio_cursada}** para calcular asistencia. "
+            f"Configuralas arriba en '⚙️ Configurar fechas del cuatrimestre'."
+        )
         return
 
     fecha_ini_a, fecha_fin_a = config_asist
     clases_totales = contar_clases_en_rango(mdias, fecha_ini_a, fecha_fin_a)
     if clases_totales == 0:
+        st.caption(
+            f"📅 No pude calcular la asistencia. Días cargados: **'{mdias or '—'}'** · "
+            f"Rango: {fecha_ini_a.strftime('%d/%m/%Y')} → {fecha_fin_a.strftime('%d/%m/%Y')}. "
+            f"Revisá los días de cursada en Cursadas → Editar."
+        )
         return
 
     faltas_mat = faltas_map.get(mid, 0)

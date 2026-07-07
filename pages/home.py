@@ -415,6 +415,10 @@ def mostrar_chip_asistencia(mdias, manio_cursada, mcuatri, mid, todas_configs, f
 # ─── Vista principal ───────────────────────────────────────────────────────────
 
 def mostrar(usuario):
+    if not usuario:
+        st.switch_page("app.py")
+        return
+
     st.title("🧠 PsicoNexo")
     st.markdown(f"### Bienvenido/a, {usuario['nombre'].split()[0]} 👋")
 

@@ -265,6 +265,10 @@ network.on("click", function(params) {{
 
 
 def mostrar(usuario):
+    if not usuario:
+        st.switch_page("app.py")
+        return
+
     st.title("📋 Plan de Estudios")
     st.caption("Licenciatura en Psicología — UdeMM")
 

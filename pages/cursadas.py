@@ -43,7 +43,7 @@ def get_todas_cursadas(usuario_id):
                        profesor1, email_profesor1, profesor2, email_profesor2, turno
                 FROM cursadas
                 WHERE usuario_id = %s
-                ORDER BY anio_cursada DESC;
+                ORDER BY anio_cursada DESC, id DESC;
             """, (usuario_id,))
             rows = cur.fetchall()
     result = {}

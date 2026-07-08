@@ -59,6 +59,10 @@ def convertir_link_preview(link):
     return None
 
 def mostrar(usuario):
+    if not usuario:
+        st.switch_page("app.py")
+        return
+
     st.title("📂 Recursos por Materia")
 
     materias = get_materias_alumno(usuario["carrera_id"])

@@ -5,3 +5,4 @@ bcrypt>=4.1.0
 python-dotenv>=1.0.0
 reportlab>=4.0.0
 pandas>=2.0.0
+psycopg-pool

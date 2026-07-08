@@ -23,6 +23,10 @@ def guardar_perfil(usuario_id, email_institucional, campus_virtual, portal_alumn
     get_perfil.clear()
 
 def mostrar(usuario):
+    if not usuario:
+        st.switch_page("app.py")
+        return
+
     st.title("👤 Mi Perfil")
 
     perfil = get_perfil(usuario["id"])

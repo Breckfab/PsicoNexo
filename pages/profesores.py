@@ -45,6 +45,10 @@ def eliminar_opinion(opinion_id):
     get_opiniones.clear()
 
 def mostrar(usuario):
+    if not usuario:
+        st.switch_page("app.py")
+        return
+
     st.title("⭐ Opiniones de Profesores")
     st.caption("Tus opiniones son privadas y solo las ves vos.")
 

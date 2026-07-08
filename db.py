@@ -1,5 +1,6 @@
 import os
 import psycopg
+from psycopg_pool import ConnectionPool
 import bcrypt
 from dotenv import load_dotenv
 import streamlit as st
@@ -15,17 +16,43 @@ def get_database_url():
 def get_connection():
     return psycopg.connect(get_database_url())
 
+@st.cache_resource
+def get_pool():
+    """
+    Pool de conexiones reutilizables para las queries de las páginas (pages/*.py).
+    check=ConnectionPool.check_connection valida cada conexión antes de entregarla,
+    para evitar el problema de que Neon cierre conexiones idle del lado del servidor
+    sin que el pool se entere (por eso antes evitábamos un pool tradicional).
+    max_idle cierra conexiones ociosas del lado del pool para no acumular conexiones
+    que Neon ya dio por muertas.
+    """
+    return ConnectionPool(
+        conninfo=get_database_url(),
+        min_size=1,
+        max_size=5,
+        max_idle=300,
+        check=ConnectionPool.check_connection,
+        kwargs={"autocommit": False},
+    )
+
 @contextmanager
 def get_conn():
     """
-    Context manager que abre una conexión fresca por cada uso y la cierra al salir.
-    Más confiable que un pool en Neon serverless (que cierra conexiones idle rápidamente).
+    Entrega una conexión del pool y la devuelve automáticamente al salir del bloque `with`.
+    Mucho más rápido que abrir una conexión nueva por cada query, sin perder la robustez
+    frente a que Neon cierre conexiones idle.
+    Si Neon está caído o sin crédito, muestra un mensaje amigable en vez de un traceback crudo.
     """
-    conn = psycopg.connect(get_database_url())
+    pool = get_pool()
     try:
-        yield conn
-    finally:
-        conn.close()
+        with pool.connection() as conn:
+            yield conn
+    except psycopg.OperationalError:
+        st.error(
+            "⚠️ No se pudo conectar a la base de datos. Puede estar temporalmente "
+            "inactiva o sin crédito disponible en Neon. Probá de nuevo en unos segundos."
+        )
+        raise
 
 def init_db():
     conn = get_connection()

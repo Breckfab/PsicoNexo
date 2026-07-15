@@ -1,4 +1,5 @@
 import streamlit as st
+import psycopg
 from db import get_conn
 
 @st.cache_data(ttl=300)
@@ -6,7 +7,7 @@ def get_perfil(usuario_id):
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute("""
-                SELECT nombre, email, email_institucional, campus_virtual, portal_alumnos, biblioteca_digital
+                SELECT nombre, email, email_institucional, campus_virtual, portal_alumnos, biblioteca_digital, legajo
                 FROM usuarios WHERE id = %s;
             """, (usuario_id,))
             return cur.fetchone()
@@ -22,6 +23,28 @@ def guardar_perfil(usuario_id, email_institucional, campus_virtual, portal_alumn
         conn.commit()
     get_perfil.clear()
 
+def actualizar_legajo(usuario_id, legajo):
+    """
+    Actualiza el número de legajo del alumno. El legajo es único a nivel de base
+    de datos (constraint UNIQUE en usuarios.legajo), por lo que si otro alumno ya
+    lo tiene cargado, devolvemos un mensaje claro en vez de un traceback crudo.
+    Un legajo vacío se guarda como NULL (estado "pendiente").
+    """
+    legajo_normalizado = legajo.strip() if legajo and legajo.strip() else None
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    UPDATE usuarios SET legajo = %s WHERE id = %s;
+                """, (legajo_normalizado, usuario_id))
+            conn.commit()
+        get_perfil.clear()
+        return True, "Legajo actualizado.", legajo_normalizado
+    except psycopg.errors.UniqueViolation:
+        return False, f"El legajo '{legajo_normalizado}' ya está en uso por otro alumno.", None
+    except Exception as e:
+        return False, f"Error al guardar el legajo: {e}", None
+
 def mostrar(usuario):
     if not usuario:
         st.switch_page("app.py")
@@ -34,7 +57,7 @@ def mostrar(usuario):
         st.error("No se pudo cargar el perfil.")
         return
 
-    nombre, email, email_institucional, campus_virtual, portal_alumnos, biblioteca_digital = perfil
+    nombre, email, email_institucional, campus_virtual, portal_alumnos, biblioteca_digital, legajo = perfil
 
     st.markdown("### Datos personales")
     col1, col2 = st.columns(2)
@@ -42,6 +65,45 @@ def mostrar(usuario):
         st.markdown(f"**Nombre:** {nombre}")
     with col2:
         st.markdown(f"**Email:** {email}")
+
+    if "editando_legajo" not in st.session_state:
+        st.session_state.editando_legajo = False
+
+    if not st.session_state.editando_legajo:
+        col_leg1, col_leg2 = st.columns([3, 1])
+        with col_leg1:
+            legajo_text = legajo if legajo else "⏳ Pendiente"
+            st.markdown(f"**Número de legajo:** {legajo_text}")
+        with col_leg2:
+            if st.button("✏️ Editar legajo", use_container_width=True):
+                st.session_state.editando_legajo = True
+                st.rerun()
+    else:
+        with st.form("form_legajo"):
+            nuevo_legajo = st.text_input(
+                "Número de legajo",
+                value=legajo or "",
+                help="Dejalo vacío si todavía no te asignaron legajo."
+            )
+            col_g, col_c = st.columns(2)
+            with col_g:
+                guardar_legajo = st.form_submit_button("💾 Guardar", use_container_width=True)
+            with col_c:
+                cancelar_legajo = st.form_submit_button("❌ Cancelar", use_container_width=True)
+
+        if guardar_legajo:
+            ok, msg, legajo_guardado = actualizar_legajo(usuario["id"], nuevo_legajo)
+            if ok:
+                usuario["legajo"] = legajo_guardado
+                st.session_state.usuario["legajo"] = legajo_guardado
+                st.session_state.editando_legajo = False
+                st.success(msg)
+                st.rerun()
+            else:
+                st.error(msg)
+        if cancelar_legajo:
+            st.session_state.editando_legajo = False
+            st.rerun()
 
     st.markdown("---")
     st.markdown("### Datos académicos")

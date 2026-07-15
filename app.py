@@ -196,11 +196,16 @@ def mostrar_navbar(usuario):
         </div>
     """, unsafe_allow_html=True)
 
+    legajo_display = usuario.get("legajo") or "Pendiente"
+
     st.markdown(f"""
         <div style="background-color:#1E1E2E; padding:12px 20px; border-radius:10px; margin-bottom:10px;
                     display:flex; align-items:center; justify-content:center; position:relative;">
             <span style="color:white; font-size:28px; font-weight:bold; text-align:center;">🧠 PsicoNexo</span>
-            <span style="color:#ccc; font-size:13px; position:absolute; right:30px;">👤 {usuario['nombre']}</span>
+            <div style="position:absolute; right:30px; text-align:right;">
+                <div style="color:#ccc; font-size:13px;">👤 {usuario['nombre']}</div>
+                <div style="color:#999; font-size:11px; margin-top:2px;">🪪 Legajo: {legajo_display}</div>
+            </div>
         </div>
     """, unsafe_allow_html=True)
 

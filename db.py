@@ -83,6 +83,13 @@ def init_db():
         );
     """)
 
+    # Número de legajo del alumno: único cuando está cargado, pero admite NULL
+    # (Postgres permite múltiples NULL en una columna UNIQUE) para alumnos que
+    # todavía no lo tienen asignado ("pendiente").
+    cur.execute("""
+        ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS legajo TEXT UNIQUE;
+    """)
+
     cur.execute("""
         CREATE TABLE IF NOT EXISTS materias (
             id SERIAL PRIMARY KEY,

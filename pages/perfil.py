@@ -12,14 +12,14 @@ def get_perfil(usuario_id):
             """, (usuario_id,))
             return cur.fetchone()
 
-def guardar_perfil(usuario_id, email_institucional, campus_virtual, portal_alumnos, biblioteca_digital):
+def guardar_perfil(usuario_id, campus_virtual, portal_alumnos, biblioteca_digital):
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute("""
-                UPDATE usuarios SET email_institucional = %s, campus_virtual = %s,
+                UPDATE usuarios SET campus_virtual = %s,
                 portal_alumnos = %s, biblioteca_digital = %s
                 WHERE id = %s;
-            """, (email_institucional, campus_virtual, portal_alumnos, biblioteca_digital, usuario_id))
+            """, (campus_virtual, portal_alumnos, biblioteca_digital, usuario_id))
         conn.commit()
     get_perfil.clear()
 
@@ -45,6 +45,17 @@ def actualizar_legajo(usuario_id, legajo):
     except Exception as e:
         return False, f"Error al guardar el legajo: {e}", None
 
+def actualizar_email_institucional(usuario_id, email_institucional):
+    email_normalizado = email_institucional.strip() if email_institucional and email_institucional.strip() else None
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                UPDATE usuarios SET email_institucional = %s WHERE id = %s;
+            """, (email_normalizado, usuario_id))
+        conn.commit()
+    get_perfil.clear()
+    return email_normalizado
+
 def mostrar(usuario):
     if not usuario:
         st.switch_page("app.py")
@@ -66,6 +77,7 @@ def mostrar(usuario):
     with col2:
         st.markdown(f"**Email:** {email}")
 
+    # ── Legajo ────────────────────────────────────────────────────────────
     if "editando_legajo" not in st.session_state:
         st.session_state.editando_legajo = False
 
@@ -105,6 +117,37 @@ def mostrar(usuario):
             st.session_state.editando_legajo = False
             st.rerun()
 
+    # ── Email institucional ──────────────────────────────────────────────
+    if "editando_email_inst" not in st.session_state:
+        st.session_state.editando_email_inst = False
+
+    if not st.session_state.editando_email_inst:
+        col_ei1, col_ei2 = st.columns([3, 1])
+        with col_ei1:
+            email_inst_text = email_institucional if email_institucional else "—"
+            st.markdown(f"**Email institucional:** {email_inst_text}")
+        with col_ei2:
+            if st.button("✏️ Editar email institucional", use_container_width=True):
+                st.session_state.editando_email_inst = True
+                st.rerun()
+    else:
+        with st.form("form_email_inst"):
+            nuevo_email_inst = st.text_input("Email institucional", value=email_institucional or "")
+            col_g, col_c = st.columns(2)
+            with col_g:
+                guardar_email_inst = st.form_submit_button("💾 Guardar", use_container_width=True)
+            with col_c:
+                cancelar_email_inst = st.form_submit_button("❌ Cancelar", use_container_width=True)
+
+        if guardar_email_inst:
+            actualizar_email_institucional(usuario["id"], nuevo_email_inst)
+            st.session_state.editando_email_inst = False
+            st.success("Email institucional actualizado.")
+            st.rerun()
+        if cancelar_email_inst:
+            st.session_state.editando_email_inst = False
+            st.rerun()
+
     st.markdown("---")
     st.markdown("### Datos académicos")
 
@@ -114,16 +157,14 @@ def mostrar(usuario):
     if not st.session_state.editando_perfil:
         col1, col2 = st.columns(2)
         with col1:
-            st.markdown(f"**Email institucional:** {email_institucional or '—'}")
-        with col2:
             campus_text = f"[🔗 Campus Virtual]({campus_virtual})" if campus_virtual else "—"
             st.markdown(f"**Campus virtual:** {campus_text}")
+        with col2:
+            portal_text = f"[🔗 Portal de Alumnos]({portal_alumnos})" if portal_alumnos else "—"
+            st.markdown(f"**Portal de Alumnos:** {portal_text}")
 
         col1, col2 = st.columns(2)
         with col1:
-            portal_text = f"[🔗 Portal de Alumnos]({portal_alumnos})" if portal_alumnos else "—"
-            st.markdown(f"**Portal de Alumnos:** {portal_text}")
-        with col2:
             biblio_text = f"[🔗 Biblioteca Digital]({biblioteca_digital})" if biblioteca_digital else "—"
             st.markdown(f"**Biblioteca Digital:** {biblio_text}")
 
@@ -135,12 +176,11 @@ def mostrar(usuario):
                 st.rerun()
         with col_borrar:
             if st.button("🗑️ Borrar datos académicos", use_container_width=True):
-                guardar_perfil(usuario["id"], "", "", "", "")
+                guardar_perfil(usuario["id"], "", "", "")
                 st.success("Datos borrados.")
                 st.rerun()
     else:
         with st.form("form_perfil"):
-            nuevo_email_inst = st.text_input("Email institucional", value=email_institucional or "")
             nuevo_campus = st.text_input("Link del campus virtual", value=campus_virtual or "")
             nuevo_portal = st.text_input("Link del portal de alumnos", value=portal_alumnos or "")
             nueva_biblio = st.text_input("Link de la biblioteca digital", value=biblioteca_digital or "")
@@ -151,7 +191,7 @@ def mostrar(usuario):
                 cancelar = st.form_submit_button("❌ Cancelar", use_container_width=True)
 
         if guardar:
-            guardar_perfil(usuario["id"], nuevo_email_inst, nuevo_campus, nuevo_portal, nueva_biblio)
+            guardar_perfil(usuario["id"], nuevo_campus, nuevo_portal, nueva_biblio)
             st.session_state.editando_perfil = False
             st.success("Perfil guardado.")
             st.rerun()

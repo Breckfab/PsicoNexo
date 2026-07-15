@@ -66,7 +66,7 @@ def login_user(email, password):
     conn = get_connection()
     cur = conn.cursor()
     cur.execute(
-        "SELECT id, email, password_hash, nombre, carrera_id, es_admin FROM usuarios WHERE email = %s;",
+        "SELECT id, email, password_hash, nombre, carrera_id, es_admin, legajo FROM usuarios WHERE email = %s;",
         (email.lower().strip(),)
     )
     user = cur.fetchone()
@@ -84,7 +84,8 @@ def login_user(email, password):
         "password_hash": user[2],
         "nombre": user[3],
         "carrera_id": user[4],
-        "es_admin": user[5]
+        "es_admin": user[5],
+        "legajo": user[6]
     }
 
 def logout():

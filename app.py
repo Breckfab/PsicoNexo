@@ -204,7 +204,7 @@ def mostrar_navbar(usuario):
             <span style="color:white; font-size:28px; font-weight:bold; text-align:center;">🧠 PsicoNexo</span>
             <div style="position:absolute; right:30px; text-align:right;">
                 <div style="color:#ccc; font-size:13px;">👤 {usuario['nombre']}</div>
-                <div style="color:#999; font-size:11px; margin-top:2px;">🪪 Legajo: {legajo_display}</div>
+                <div style="color:#E0D4FF; font-size:15px; font-weight:bold; margin-top:3px;">🪪 Legajo: {legajo_display}</div>
             </div>
         </div>
     """, unsafe_allow_html=True)

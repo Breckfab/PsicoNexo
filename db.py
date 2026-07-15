@@ -239,6 +239,20 @@ def init_db():
         );
     """)
 
+    # Feriados / días sin clase configurados por el alumno, para que
+    # contar_clases_en_rango() (en cursadas.py y home.py) no los cuente
+    # como clase dictada al calcular la asistencia.
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS feriados (
+            id SERIAL PRIMARY KEY,
+            usuario_id INTEGER REFERENCES usuarios(id),
+            fecha DATE NOT NULL,
+            descripcion TEXT,
+            created_at TIMESTAMP DEFAULT NOW(),
+            UNIQUE(usuario_id, fecha)
+        );
+    """)
+
     cur.execute("""
         INSERT INTO carreras (nombre, universidad)
         VALUES ('Licenciatura en Psicología', 'UdeMM')
@@ -262,3 +276,37 @@ def crear_admin_si_no_existe():
         conn.commit()
     cur.close()
     conn.close()
+
+# ─── Feriados / días sin clase ──────────────────────────────────────────────
+
+@st.cache_data(ttl=300)
+def get_feriados(usuario_id):
+    """Devuelve la lista de feriados del alumno como [(id, fecha, descripcion), ...]."""
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT id, fecha, descripcion
+                FROM feriados
+                WHERE usuario_id = %s
+                ORDER BY fecha;
+            """, (usuario_id,))
+            return cur.fetchall()
+
+def agregar_feriado(usuario_id, fecha, descripcion=None):
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO feriados (usuario_id, fecha, descripcion)
+                VALUES (%s, %s, %s)
+                ON CONFLICT (usuario_id, fecha)
+                DO UPDATE SET descripcion = EXCLUDED.descripcion;
+            """, (usuario_id, fecha, descripcion))
+        conn.commit()
+    get_feriados.clear()
+
+def borrar_feriado(feriado_id):
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM feriados WHERE id = %s;", (feriado_id,))
+        conn.commit()
+    get_feriados.clear()

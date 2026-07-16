@@ -1,5 +1,5 @@
 import streamlit as st
-from db import get_conn
+from db import get_conn, get_feriados, agregar_feriado, borrar_feriado
 from datetime import datetime, date, timedelta
 
 DIA_INDEX = {"Lunes": 0, "Martes": 1, "Miércoles": 2, "Jueves": 3, "Viernes": 4, "Sábado": 5, "Domingo": 6}
@@ -79,18 +79,21 @@ def get_faltas_por_materia(usuario_id):
             """, (usuario_id,))
             return {r[0]: r[1] for r in cur.fetchall()}
 
-def contar_clases_en_rango(dias_str, fecha_inicio, fecha_fin):
-    """Cuenta cuántas veces caen los días de cursada dentro del rango de fechas (feriados no se descuentan)."""
+def contar_clases_en_rango(dias_str, fecha_inicio, fecha_fin, feriados=None):
+    """Cuenta cuántas veces caen los días de cursada dentro del rango de fechas.
+    `feriados`, si se pasa, es un set/conjunto de fechas (date) que se descuentan
+    del conteo aunque coincidan con un día de cursada."""
     if not dias_str or not fecha_inicio or not fecha_fin or fecha_fin < fecha_inicio:
         return 0
     dias_lista = [d.strip() for d in dias_str.split(",") if d.strip()]
     indices = {DIA_INDEX[d] for d in dias_lista if d in DIA_INDEX}
     if not indices:
         return 0
+    feriados = feriados or set()
     total = 0
     fecha = fecha_inicio
     while fecha <= fecha_fin:
-        if fecha.weekday() in indices:
+        if fecha.weekday() in indices and fecha not in feriados:
             total += 1
         fecha += timedelta(days=1)
     return total
@@ -338,6 +341,46 @@ def mostrar_config_fechas(usuario_id, anio_actual, cuatrimestre_actual, todas_co
             for (anio_c, cuatri_c), (fi, ff) in sorted(todas_configs.items(), reverse=True):
                 st.caption(f"📅 {cuatri_c} {anio_c}: {fi.strftime('%d/%m/%Y')} → {ff.strftime('%d/%m/%Y')}")
 
+# ─── Panel de feriados / días sin clase ───────────────────────────────────────
+
+def mostrar_config_feriados(usuario_id):
+    """Permite cargar y borrar fechas que no cuentan como clase dictada
+    (feriados, paros, suspensiones puntuales) al calcular la asistencia."""
+    feriados = get_feriados(usuario_id)
+
+    with st.expander("🗓️ Feriados / días sin clase", expanded=False):
+        st.caption(
+            "Cargá acá las fechas que no se dictaron clase (feriados, paros, suspensiones). "
+            "No se van a contar como clase al calcular tu % de asistencia."
+        )
+
+        with st.form("form_nuevo_feriado"):
+            col1, col2 = st.columns([1, 2])
+            with col1:
+                fecha_feriado = st.date_input("Fecha", value=date.today(), key="nuevo_feriado_fecha")
+            with col2:
+                desc_feriado = st.text_input("Descripción (opcional)", key="nuevo_feriado_desc")
+            agregar = st.form_submit_button("➕ Agregar", use_container_width=True)
+
+        if agregar:
+            agregar_feriado(usuario_id, fecha_feriado, desc_feriado.strip() or None)
+            st.success("Feriado agregado.")
+            st.rerun()
+
+        if feriados:
+            st.markdown("**Feriados cargados:**")
+            for fid, ffecha, fdesc in feriados:
+                col_f1, col_f2 = st.columns([4, 1])
+                with col_f1:
+                    desc_text = f" — {fdesc}" if fdesc else ""
+                    st.markdown(f"📌 {ffecha.strftime('%d/%m/%Y')}{desc_text}")
+                with col_f2:
+                    if st.button("🗑️", key=f"del_feriado_{fid}", use_container_width=True):
+                        borrar_feriado(fid)
+                        st.rerun()
+        else:
+            st.caption("No cargaste feriados todavía.")
+
 # ─── Barra de progreso de cuatrimestre ────────────────────────────────────────
 
 def mostrar_barra_cuatrimestre(cuatrimestre, anio_cursada, todas_configs):
@@ -370,7 +413,7 @@ def mostrar_barra_cuatrimestre(cuatrimestre, anio_cursada, todas_configs):
         unsafe_allow_html=True
     )
 
-def mostrar_chip_asistencia(mdias, manio_cursada, mcuatri, mid, todas_configs, faltas_map):
+def mostrar_chip_asistencia(mdias, manio_cursada, mcuatri, mid, todas_configs, faltas_map, feriados_set=None):
     config_asist = todas_configs.get((manio_cursada, mcuatri))
     if not config_asist:
         st.caption(
@@ -380,7 +423,7 @@ def mostrar_chip_asistencia(mdias, manio_cursada, mcuatri, mid, todas_configs, f
         return
 
     fecha_ini_a, fecha_fin_a = config_asist
-    clases_totales = contar_clases_en_rango(mdias, fecha_ini_a, fecha_fin_a)
+    clases_totales = contar_clases_en_rango(mdias, fecha_ini_a, fecha_fin_a, feriados_set)
     if clases_totales == 0:
         st.caption(
             f"📅 No pude calcular la asistencia. Días cargados: **'{mdias or '—'}'** · "
@@ -454,6 +497,7 @@ def mostrar(usuario):
     st.markdown("---")
 
     mostrar_config_fechas(usuario["id"], anio_actual, cuatrimestre_actual, todas_configs)
+    mostrar_config_feriados(usuario["id"])
 
     st.markdown("---")
 
@@ -462,6 +506,7 @@ def mostrar(usuario):
         usuario["id"], anio_actual, cuatrimestre_actual
     )
     faltas_map = get_faltas_por_materia(usuario["id"])
+    feriados_set = {f[1] for f in get_feriados(usuario["id"])}
 
     if not materias_cursando:
         st.info("No tenés materias registradas para este cuatrimestre.")
@@ -493,7 +538,7 @@ def mostrar(usuario):
                     )
 
                 mostrar_barra_cuatrimestre(mcuatri, manio_cursada, todas_configs)
-                mostrar_chip_asistencia(mdias, manio_cursada, mcuatri, mid, todas_configs, faltas_map)
+                mostrar_chip_asistencia(mdias, manio_cursada, mcuatri, mid, todas_configs, faltas_map, feriados_set)
 
                 st.markdown("**Notas cargadas:**")
                 if total_notas and int(total_notas) > 0:

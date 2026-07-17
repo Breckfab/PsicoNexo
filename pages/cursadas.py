@@ -1,5 +1,5 @@
 import streamlit as st
-from db import get_conn
+from db import get_conn, get_feriados
 from datetime import datetime, date, timedelta
 
 MODALIDADES = ["Presencial", "Híbrida", "Asincrónica"]
@@ -195,18 +195,21 @@ def borrar_falta(falta_id):
         conn.commit()
     get_faltas_materia.clear()
 
-def contar_clases_en_rango(dias_str, fecha_inicio, fecha_fin):
-    """Cuenta cuántas veces caen los días de cursada dentro del rango de fechas (feriados no se descuentan)."""
+def contar_clases_en_rango(dias_str, fecha_inicio, fecha_fin, feriados=None):
+    """Cuenta cuántas veces caen los días de cursada dentro del rango de fechas.
+    `feriados`, si se pasa, es un set/conjunto de fechas (date) que se descuentan
+    del conteo aunque coincidan con un día de cursada."""
     if not dias_str or not fecha_inicio or not fecha_fin or fecha_fin < fecha_inicio:
         return 0
     dias_lista = [d.strip() for d in dias_str.split(",") if d.strip()]
     indices = {DIA_INDEX[d] for d in dias_lista if d in DIA_INDEX}
     if not indices:
         return 0
+    feriados = feriados or set()
     total = 0
     fecha = fecha_inicio
     while fecha <= fecha_fin:
-        if fecha.weekday() in indices:
+        if fecha.weekday() in indices and fecha not in feriados:
             total += 1
         fecha += timedelta(days=1)
     return total
@@ -220,12 +223,12 @@ def clasificar_asistencia(porcentaje):
     else:
         return "#e74c3c", True
 
-def calcular_asistencia(usuario_id, materia_id, dias_str, anio_cursada, cuatrimestre):
+def calcular_asistencia(usuario_id, materia_id, dias_str, anio_cursada, cuatrimestre, feriados=None):
     config = get_config_cuatrimestre_materia(usuario_id, anio_cursada, cuatrimestre)
     if not config:
         return None
     fecha_inicio, fecha_fin = config
-    clases_totales = contar_clases_en_rango(dias_str, fecha_inicio, fecha_fin)
+    clases_totales = contar_clases_en_rango(dias_str, fecha_inicio, fecha_fin, feriados)
     if clases_totales == 0:
         return None
     faltas = get_faltas_materia(usuario_id, materia_id)
@@ -255,8 +258,10 @@ def mostrar_asistencia(usuario, mid, dias, anio, cuatri):
         )
         return
 
+    feriados_set = {f[1] for f in get_feriados(usuario["id"])}
+
     fecha_inicio, fecha_fin = config
-    clases_totales = contar_clases_en_rango(dias, fecha_inicio, fecha_fin)
+    clases_totales = contar_clases_en_rango(dias, fecha_inicio, fecha_fin, feriados_set)
     if clases_totales == 0:
         st.caption(
             f"📅 No pude calcular clases. Días cargados: **'{dias or '—'}'** · "
@@ -265,7 +270,7 @@ def mostrar_asistencia(usuario, mid, dias, anio, cuatri):
         )
         return
 
-    stats = calcular_asistencia(usuario["id"], mid, dias, anio, cuatri)
+    stats = calcular_asistencia(usuario["id"], mid, dias, anio, cuatri, feriados_set)
     porcentaje = stats["porcentaje"]
     color, negrita = clasificar_asistencia(porcentaje)
     peso = "bold" if negrita else "normal"

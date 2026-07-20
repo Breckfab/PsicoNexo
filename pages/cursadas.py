@@ -195,6 +195,16 @@ def borrar_falta(falta_id):
         conn.commit()
     get_faltas_materia.clear()
 
+def actualizar_falta(falta_id, fecha, justificada):
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                UPDATE asistencias SET fecha = %s, justificada = %s
+                WHERE id = %s;
+            """, (fecha, justificada, falta_id))
+        conn.commit()
+    get_faltas_materia.clear()
+
 def contar_clases_en_rango(dias_str, fecha_inicio, fecha_fin, feriados=None):
     """Cuenta cuántas veces caen los días de cursada dentro del rango de fechas.
     `feriados`, si se pasa, es un set/conjunto de fechas (date) que se descuentan
@@ -326,12 +336,41 @@ def mostrar_asistencia(usuario, mid, dias, anio, cuatri):
             st.markdown("**Faltas registradas:**")
             for fid, ffecha, fjust in stats["detalle_faltas"]:
                 just_text = " · justificada" if fjust else ""
-                col_ff1, col_ff2 = st.columns([4, 1])
+                col_ff1, col_ff2, col_ff3 = st.columns([3, 1, 1])
                 with col_ff1:
                     st.markdown(f"📌 {ffecha.strftime('%d/%m/%Y')}{just_text}")
                 with col_ff2:
+                    if st.button("✏️", key=f"edit_falta_{fid}", use_container_width=True):
+                        st.session_state[f"editando_falta_{fid}"] = True
+                        st.rerun()
+                with col_ff3:
                     if st.button("🗑️", key=f"del_falta_{fid}", use_container_width=True):
                         borrar_falta(fid)
+                        st.rerun()
+
+                if st.session_state.get(f"editando_falta_{fid}"):
+                    with st.form(f"form_edit_falta_{fid}"):
+                        col_ef1, col_ef2 = st.columns(2)
+                        with col_ef1:
+                            nueva_fecha_falta = st.date_input(
+                                "Fecha de la falta", value=ffecha, key=f"nueva_fecha_falta_{fid}"
+                            )
+                        with col_ef2:
+                            nueva_justificada = st.checkbox(
+                                "¿Justificada?", value=fjust, key=f"nueva_just_falta_{fid}"
+                            )
+                        col_gf, col_cf = st.columns(2)
+                        with col_gf:
+                            guardar_falta_edit = st.form_submit_button("💾 Guardar", use_container_width=True)
+                        with col_cf:
+                            cancelar_falta_edit = st.form_submit_button("❌ Cancelar", use_container_width=True)
+                    if guardar_falta_edit:
+                        actualizar_falta(fid, nueva_fecha_falta, nueva_justificada)
+                        st.session_state[f"editando_falta_{fid}"] = False
+                        st.success("Falta actualizada.")
+                        st.rerun()
+                    if cancelar_falta_edit:
+                        st.session_state[f"editando_falta_{fid}"] = False
                         st.rerun()
         else:
             st.caption("No hay faltas registradas todavía. Por defecto se asume presente en todas las clases.")

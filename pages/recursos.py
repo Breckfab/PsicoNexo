@@ -36,6 +36,16 @@ def agregar_recurso(usuario_id, materia_id, nombre, tipo, link):
         conn.commit()
     get_recursos.clear()
 
+def actualizar_recurso(recurso_id, nombre, tipo, link):
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                UPDATE recursos SET nombre = %s, tipo = %s, link = %s
+                WHERE id = %s;
+            """, (nombre, tipo, link, recurso_id))
+        conn.commit()
+    get_recursos.clear()
+
 def eliminar_recurso(recurso_id):
     with get_conn() as conn:
         with conn.cursor() as cur:
@@ -112,19 +122,56 @@ def mostrar(usuario):
                 iconos = {"Bibliografía": "📚", "Apunte": "📝", "NotebookLM": "🤖", "Otro": "🔗"}
                 st.markdown(f"### {iconos.get(rtipo, '🔗')} {rtipo}")
 
-            col1, col2 = st.columns([4, 1])
-            with col1:
-                st.markdown(f"**{rnombre}**")
-                preview_url = convertir_link_preview(rlink)
-                if preview_url:
-                    st.markdown(f"[🔗 Abrir]({rlink})")
-                    with st.expander("👁️ Ver PDF"):
-                        st.components.v1.iframe(preview_url, height=500)
-                else:
-                    st.markdown(f"[🔗 Abrir]({rlink})")
-            with col2:
-                if st.button("🗑️ Borrar", key=f"del_{rid}", use_container_width=True):
-                    eliminar_recurso(rid)
+            key_edit_rec = f"editando_recurso_{rid}"
+
+            if st.session_state.get(key_edit_rec):
+                # ── Formulario de edición inline ──────────────────
+                with st.form(f"form_edit_recurso_{rid}"):
+                    nueva_nombre = st.text_input("Nombre del recurso", value=rnombre, key=f"edit_nombre_rec_{rid}")
+                    nuevo_tipo = st.selectbox(
+                        "Tipo", TIPOS,
+                        index=TIPOS.index(rtipo) if rtipo in TIPOS else 0,
+                        key=f"edit_tipo_rec_{rid}"
+                    )
+                    nuevo_link = st.text_input(
+                        "Link (Google Drive, Dropbox, NotebookLM, etc.)", value=rlink, key=f"edit_link_rec_{rid}"
+                    )
+                    col_gr, col_cr = st.columns(2)
+                    with col_gr:
+                        guardar_rec_edit = st.form_submit_button("💾 Guardar", use_container_width=True)
+                    with col_cr:
+                        cancelar_rec_edit = st.form_submit_button("❌ Cancelar", use_container_width=True)
+
+                if guardar_rec_edit:
+                    if not nueva_nombre.strip() or not nuevo_link.strip():
+                        st.error("Completá nombre y link.")
+                    else:
+                        actualizar_recurso(rid, nueva_nombre.strip(), nuevo_tipo, nuevo_link.strip())
+                        st.session_state[key_edit_rec] = False
+                        st.success("Recurso actualizado.")
+                        st.rerun()
+                if cancelar_rec_edit:
+                    st.session_state[key_edit_rec] = False
                     st.rerun()
+
+            else:
+                col1, col2, col3 = st.columns([4, 1, 1])
+                with col1:
+                    st.markdown(f"**{rnombre}**")
+                    preview_url = convertir_link_preview(rlink)
+                    if preview_url:
+                        st.markdown(f"[🔗 Abrir]({rlink})")
+                        with st.expander("👁️ Ver PDF"):
+                            st.components.v1.iframe(preview_url, height=500)
+                    else:
+                        st.markdown(f"[🔗 Abrir]({rlink})")
+                with col2:
+                    if st.button("✏️ Editar", key=f"edit_recurso_{rid}", use_container_width=True):
+                        st.session_state[key_edit_rec] = True
+                        st.rerun()
+                with col3:
+                    if st.button("🗑️ Borrar", key=f"del_{rid}", use_container_width=True):
+                        eliminar_recurso(rid)
+                        st.rerun()
 
         st.markdown("---")

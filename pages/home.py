@@ -409,14 +409,51 @@ def mostrar_config_feriados(usuario_id):
         if feriados:
             st.markdown("**Feriados cargados:**")
             for fid, ffecha, fdesc in feriados:
-                col_f1, col_f2 = st.columns([4, 1])
-                with col_f1:
-                    desc_text = f" — {fdesc}" if fdesc else ""
-                    st.markdown(f"📌 {ffecha.strftime('%d/%m/%Y')}{desc_text}")
-                with col_f2:
-                    if st.button("🗑️", key=f"del_feriado_{fid}", use_container_width=True):
-                        borrar_feriado(fid)
+                key_edit_fer = f"editando_feriado_{fid}"
+
+                if st.session_state.get(key_edit_fer):
+                    # ── Formulario de edición inline ──────────────────
+                    with st.form(f"form_edit_feriado_{fid}"):
+                        col_ef1, col_ef2 = st.columns([1, 2])
+                        with col_ef1:
+                            nueva_fecha_fer = st.date_input(
+                                "Fecha", value=ffecha, key=f"edit_fecha_feriado_{fid}"
+                            )
+                        with col_ef2:
+                            nueva_desc_fer = st.text_input(
+                                "Descripción (opcional)", value=fdesc or "", key=f"edit_desc_feriado_{fid}"
+                            )
+                        col_gf, col_cf = st.columns(2)
+                        with col_gf:
+                            guardar_fer_edit = st.form_submit_button("💾 Guardar", use_container_width=True)
+                        with col_cf:
+                            cancelar_fer_edit = st.form_submit_button("❌ Cancelar", use_container_width=True)
+
+                    if guardar_fer_edit:
+                        desc_final = nueva_desc_fer.strip() or None
+                        if nueva_fecha_fer != ffecha:
+                            # La fecha es parte de la clave única: borrar y recrear.
+                            borrar_feriado(fid)
+                        agregar_feriado(usuario_id, nueva_fecha_fer, desc_final)
+                        st.session_state[key_edit_fer] = False
+                        st.success("Feriado actualizado.")
                         st.rerun()
+                    if cancelar_fer_edit:
+                        st.session_state[key_edit_fer] = False
+                        st.rerun()
+                else:
+                    col_f1, col_f2, col_f3 = st.columns([4, 1, 1])
+                    with col_f1:
+                        desc_text = f" — {fdesc}" if fdesc else ""
+                        st.markdown(f"📌 {ffecha.strftime('%d/%m/%Y')}{desc_text}")
+                    with col_f2:
+                        if st.button("✏️", key=f"edit_feriado_{fid}", use_container_width=True):
+                            st.session_state[key_edit_fer] = True
+                            st.rerun()
+                    with col_f3:
+                        if st.button("🗑️", key=f"del_feriado_{fid}", use_container_width=True):
+                            borrar_feriado(fid)
+                            st.rerun()
         else:
             st.caption("No cargaste feriados todavía.")
 

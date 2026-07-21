@@ -37,6 +37,16 @@ def agregar_opinion(usuario_id, materia_id, profesor, valoracion, observaciones)
         conn.commit()
     get_opiniones.clear()
 
+def actualizar_opinion(opinion_id, valoracion, observaciones):
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                UPDATE opiniones_profesores SET valoracion = %s, observaciones = %s
+                WHERE id = %s;
+            """, (valoracion, observaciones, opinion_id))
+        conn.commit()
+    get_opiniones.clear()
+
 def eliminar_opinion(opinion_id):
     with get_conn() as conn:
         with conn.cursor() as cur:
@@ -88,18 +98,56 @@ def mostrar(usuario):
                     with st.expander(f"{icono_prof} {profesor} ({len(ops)} materia{'s' if len(ops) > 1 else ''})"):
                         for op in ops:
                             oid, _, valoracion, observaciones, materia_nombre, materia_anio = op
-                            icono_val = "✅" if valoracion == "Recomendado" else "❌"
+                            key_edit_op = f"editando_opinion_{oid}"
                             anio_texto = nombres_anio.get(materia_anio, f"Año {materia_anio}")
 
-                            col1, col2 = st.columns([5, 1])
-                            with col1:
-                                st.markdown(f"{icono_val} **{valoracion}** — {anio_texto}: {materia_nombre}")
-                                if observaciones:
-                                    st.caption(f"💬 {observaciones}")
-                            with col2:
-                                if st.button("🗑️", key=f"del_op_{oid}", use_container_width=True):
-                                    eliminar_opinion(oid)
+                            if st.session_state.get(key_edit_op):
+                                # ── Formulario de edición inline ──────────────────
+                                with st.form(f"form_edit_opinion_{oid}"):
+                                    st.markdown(f"**✏️ Editando opinión — {anio_texto}: {materia_nombre}**")
+                                    nueva_valoracion = st.radio(
+                                        "Valoración", VALORACIONES,
+                                        index=VALORACIONES.index(valoracion) if valoracion in VALORACIONES else 0,
+                                        horizontal=True,
+                                        key=f"edit_val_{oid}"
+                                    )
+                                    nuevas_obs = st.text_area(
+                                        "Observaciones (opcional)",
+                                        value=observaciones or "",
+                                        height=100,
+                                        key=f"edit_obs_{oid}"
+                                    )
+                                    col_go, col_co = st.columns(2)
+                                    with col_go:
+                                        guardar_op_edit = st.form_submit_button("💾 Guardar", use_container_width=True)
+                                    with col_co:
+                                        cancelar_op_edit = st.form_submit_button("❌ Cancelar", use_container_width=True)
+
+                                if guardar_op_edit:
+                                    actualizar_opinion(oid, nueva_valoracion, nuevas_obs.strip())
+                                    st.session_state[key_edit_op] = False
+                                    st.success("Opinión actualizada.")
                                     st.rerun()
+                                if cancelar_op_edit:
+                                    st.session_state[key_edit_op] = False
+                                    st.rerun()
+
+                            else:
+                                icono_val = "✅" if valoracion == "Recomendado" else "❌"
+
+                                col1, col2, col3 = st.columns([5, 1, 1])
+                                with col1:
+                                    st.markdown(f"{icono_val} **{valoracion}** — {anio_texto}: {materia_nombre}")
+                                    if observaciones:
+                                        st.caption(f"💬 {observaciones}")
+                                with col2:
+                                    if st.button("✏️", key=f"edit_op_{oid}", use_container_width=True):
+                                        st.session_state[key_edit_op] = True
+                                        st.rerun()
+                                with col3:
+                                    if st.button("🗑️", key=f"del_op_{oid}", use_container_width=True):
+                                        eliminar_opinion(oid)
+                                        st.rerun()
 
                         st.markdown("---")
 

@@ -339,7 +339,46 @@ def mostrar_config_fechas(usuario_id, anio_actual, cuatrimestre_actual, todas_co
         if todas_configs:
             st.markdown("**Configuraciones guardadas:**")
             for (anio_c, cuatri_c), (fi, ff) in sorted(todas_configs.items(), reverse=True):
-                st.caption(f"📅 {cuatri_c} {anio_c}: {fi.strftime('%d/%m/%Y')} → {ff.strftime('%d/%m/%Y')}")
+                key_edit_cfg = f"editando_config_{anio_c}_{cuatri_c}"
+
+                if st.session_state.get(key_edit_cfg):
+                    # ── Formulario de edición inline ──────────────────
+                    with st.form(f"form_edit_config_{anio_c}_{cuatri_c}"):
+                        st.markdown(f"**✏️ Editando: {cuatri_c} {anio_c}**")
+                        col_e1, col_e2 = st.columns(2)
+                        with col_e1:
+                            nueva_fi = st.date_input(
+                                "Fecha de inicio", value=fi, key=f"edit_fi_{anio_c}_{cuatri_c}"
+                            )
+                        with col_e2:
+                            nueva_ff = st.date_input(
+                                "Fecha de fin", value=ff, key=f"edit_ff_{anio_c}_{cuatri_c}"
+                            )
+                        col_ge, col_ce = st.columns(2)
+                        with col_ge:
+                            guardar_cfg_edit = st.form_submit_button("💾 Guardar", use_container_width=True)
+                        with col_ce:
+                            cancelar_cfg_edit = st.form_submit_button("❌ Cancelar", use_container_width=True)
+
+                    if guardar_cfg_edit:
+                        if nueva_ff <= nueva_fi:
+                            st.error("La fecha de fin debe ser posterior a la de inicio.")
+                        else:
+                            guardar_config_cuatrimestre(usuario_id, anio_c, cuatri_c, nueva_fi, nueva_ff)
+                            st.session_state[key_edit_cfg] = False
+                            st.success(f"✅ {cuatri_c} {anio_c} actualizado: {nueva_fi.strftime('%d/%m/%Y')} → {nueva_ff.strftime('%d/%m/%Y')}")
+                            st.rerun()
+                    if cancelar_cfg_edit:
+                        st.session_state[key_edit_cfg] = False
+                        st.rerun()
+                else:
+                    col_cfg1, col_cfg2 = st.columns([4, 1])
+                    with col_cfg1:
+                        st.caption(f"📅 {cuatri_c} {anio_c}: {fi.strftime('%d/%m/%Y')} → {ff.strftime('%d/%m/%Y')}")
+                    with col_cfg2:
+                        if st.button("✏️ Editar", key=f"btn_edit_cfg_{anio_c}_{cuatri_c}", use_container_width=True):
+                            st.session_state[key_edit_cfg] = True
+                            st.rerun()
 
 # ─── Panel de feriados / días sin clase ───────────────────────────────────────
 

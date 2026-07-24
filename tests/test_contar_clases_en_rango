@@ -1,0 +1,128 @@
+"""
+Tests para contar_clases_en_rango (pages/cursadas.py).
+
+Esta función es la base del cálculo de asistencia (calcular_asistencia,
+mostrar_asistencia, y su versión duplicada en home.py para los chips de
+asistencia). Un error acá se propaga directo al % de asistencia que ve
+el alumno, por eso conviene tenerla bien cubierta.
+
+Cómo correrlos:
+    pytest tests/test_contar_clases_en_rango.py -v
+
+Requiere que el entorno tenga instaladas las dependencias del proyecto
+(streamlit, psycopg, psycopg_pool, bcrypt, python-dotenv), porque
+pages/cursadas.py las importa a nivel de módulo a través de db.py.
+"""
+
+import os
+import sys
+from datetime import date
+
+import pytest
+
+# Aseguramos que la raíz del repo esté en el path sin importar desde dónde
+# se invoque pytest (así "import pages.cursadas" funciona siempre).
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+
+from pages.cursadas import contar_clases_en_rango
+
+
+class TestCasosBasicos:
+    def test_un_dia_a_la_semana_un_mes_completo(self):
+        # Marzo 2026: los lunes caen 2, 9, 16, 23 y 30 -> 5 lunes.
+        resultado = contar_clases_en_rango("Lunes", date(2026, 3, 1), date(2026, 3, 31))
+        assert resultado == 5
+
+    def test_dos_dias_a_la_semana_cuatrimestre_completo(self):
+        # Lunes y Miércoles entre el 17/3/2026 y el 18/7/2026.
+        resultado = contar_clases_en_rango(
+            "Lunes, Miércoles", date(2026, 3, 17), date(2026, 7, 18)
+        )
+        assert resultado == 35
+
+    def test_dias_con_espacios_extra_y_coma_final(self):
+        # " Lunes ,  Miércoles, " debe interpretarse igual que "Lunes, Miércoles"
+        resultado = contar_clases_en_rango(
+            " Lunes ,  Miércoles, ", date(2026, 3, 17), date(2026, 7, 18)
+        )
+        assert resultado == 35
+
+
+class TestCasosBorde:
+    def test_dias_str_vacio_devuelve_cero(self):
+        assert contar_clases_en_rango("", date(2026, 3, 1), date(2026, 3, 31)) == 0
+
+    def test_dias_str_none_devuelve_cero(self):
+        assert contar_clases_en_rango(None, date(2026, 3, 1), date(2026, 3, 31)) == 0
+
+    def test_fecha_inicio_none_devuelve_cero(self):
+        assert contar_clases_en_rango("Lunes", None, date(2026, 3, 31)) == 0
+
+    def test_fecha_fin_none_devuelve_cero(self):
+        assert contar_clases_en_rango("Lunes", date(2026, 3, 1), None) == 0
+
+    def test_fecha_fin_anterior_a_inicio_devuelve_cero(self):
+        # Rango invertido (fin antes que inicio): no debe explotar, debe dar 0.
+        assert contar_clases_en_rango("Lunes", date(2026, 3, 31), date(2026, 3, 1)) == 0
+
+    def test_mismo_dia_coincide_con_dia_de_cursada(self):
+        # 1/3/2026 es domingo.
+        assert contar_clases_en_rango("Domingo", date(2026, 3, 1), date(2026, 3, 1)) == 1
+
+    def test_mismo_dia_no_coincide_con_dia_de_cursada(self):
+        assert contar_clases_en_rango("Lunes", date(2026, 3, 1), date(2026, 3, 1)) == 0
+
+    def test_dia_invalido_o_mal_tipeado_se_ignora(self):
+        # "Funday" no está en DIA_INDEX: se descarta, pero "Lunes" sigue contando.
+        resultado = contar_clases_en_rango("Lunes, Funday", date(2026, 3, 1), date(2026, 3, 31))
+        assert resultado == 5
+
+    def test_todos_los_dias_invalidos_devuelve_cero(self):
+        resultado = contar_clases_en_rango("Funday, Someday", date(2026, 3, 1), date(2026, 3, 31))
+        assert resultado == 0
+
+
+class TestFeriados:
+    def test_feriados_se_descuentan_del_conteo(self):
+        # Marzo 2026 tiene 5 lunes; descontamos 2 (2/3 y 9/3) -> quedan 3.
+        feriados = {date(2026, 3, 2), date(2026, 3, 9)}
+        resultado = contar_clases_en_rango(
+            "Lunes", date(2026, 3, 1), date(2026, 3, 31), feriados
+        )
+        assert resultado == 3
+
+    def test_feriado_que_no_coincide_con_dia_de_cursada_no_afecta(self):
+        # 3/3/2026 es martes: no coincide con "Lunes", no debería restar nada.
+        feriados = {date(2026, 3, 3)}
+        resultado = contar_clases_en_rango(
+            "Lunes", date(2026, 3, 1), date(2026, 3, 31), feriados
+        )
+        assert resultado == 5
+
+    def test_feriados_none_equivale_a_sin_feriados(self):
+        resultado = contar_clases_en_rango(
+            "Lunes", date(2026, 3, 1), date(2026, 3, 31), feriados=None
+        )
+        assert resultado == 5
+
+    def test_todas_las_clases_feriado_devuelve_cero(self):
+        # Si todos los lunes del mes están marcados como feriado, el total es 0.
+        feriados = {date(2026, 3, 2), date(2026, 3, 9), date(2026, 3, 16),
+                    date(2026, 3, 23), date(2026, 3, 30)}
+        resultado = contar_clases_en_rango(
+            "Lunes", date(2026, 3, 1), date(2026, 3, 31), feriados
+        )
+        assert resultado == 0
+
+
+@pytest.mark.parametrize(
+    "dias_str,fecha_inicio,fecha_fin,feriados,esperado",
+    [
+        ("Lunes", date(2026, 3, 1), date(2026, 3, 31), None, 5),
+        ("Lunes, Miércoles", date(2026, 3, 17), date(2026, 7, 18), None, 35),
+        ("", date(2026, 3, 1), date(2026, 3, 31), None, 0),
+        ("Lunes", date(2026, 3, 31), date(2026, 3, 1), None, 0),
+    ],
+)
+def test_parametrizado_conteo_de_clases(dias_str, fecha_inicio, fecha_fin, feriados, esperado):
+    assert contar_clases_en_rango(dias_str, fecha_inicio, fecha_fin, feriados) == esperado

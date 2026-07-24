@@ -115,6 +115,26 @@ def borrar_cursada(usuario_id, materia_id):
     get_todas_cursadas.clear()
     get_clases_hoy.clear()
 
+def borrar_cursada_especifica(usuario_id, materia_id, anio_cursada, cuatrimestre):
+    """Borra únicamente la cursada puntual (año + cuatrimestre) indicada, sin
+    afectar otras cursadas históricas de la misma materia. Se usa al editar
+    una cursada cuando el año o el cuatrimestre cambian: como esos campos son
+    parte de la UNIQUE constraint de la tabla, guardar_cursada no actualiza la
+    fila original (el ON CONFLICT no matchea), sino que inserta una fila
+    nueva y deja la vieja huérfana con datos desactualizados. Sin este borrado
+    previo, get_todas_cursadas() puede terminar mostrando esa fila vieja como
+    si fuera la cursada vigente."""
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                DELETE FROM cursadas
+                WHERE usuario_id = %s AND materia_id = %s
+                AND anio_cursada = %s AND cuatrimestre = %s;
+            """, (usuario_id, materia_id, anio_cursada, cuatrimestre))
+        conn.commit()
+    get_todas_cursadas.clear()
+    get_clases_hoy.clear()
+
 def guardar_tarea(usuario_id, materia_id, numero, descripcion, fecha_vencimiento):
     with get_conn() as conn:
         with conn.cursor() as cur:
@@ -497,6 +517,13 @@ def mostrar(usuario):
                                 with col2:
                                     cancelar = st.form_submit_button("❌ Cancelar", use_container_width=True)
                             if guardar:
+                                if e_anio != anio or e_cuatri != cuatri:
+                                    # Año o cuatrimestre cambiaron: son parte de la clave única
+                                    # de "cursadas", así que el guardado de abajo insertaría una
+                                    # fila nueva y dejaría la vieja huérfana con datos desactualizados.
+                                    # Hay que borrar la fila original primero (mismo patrón que se
+                                    # usa para feriados en home.py).
+                                    borrar_cursada_especifica(usuario["id"], mid, anio, cuatri)
                                 guardar_cursada(usuario["id"], mid, e_anio, e_cuatri, e_modalidad, e_turno, ", ".join(e_dias), e_horario, e_link, e_prof1, e_email_prof1, e_prof2, e_email_prof2)
                                 st.session_state[f"editando_cursada_{mid}"] = False
                                 st.success("Cursada actualizada.")

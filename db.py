@@ -253,6 +253,23 @@ def init_db():
         );
     """)
 
+    # Registro de intentos de login fallidos, usado por auth.py para aplicar
+    # rate limiting (bloqueo temporal por email tras varios intentos fallidos
+    # en una ventana de tiempo). No se guarda si fue exitoso: los éxitos
+    # limpian el historial de ese email.
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS intentos_login (
+            id SERIAL PRIMARY KEY,
+            email TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT NOW()
+        );
+    """)
+
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_intentos_login_email_fecha
+        ON intentos_login (email, created_at);
+    """)
+
     cur.execute("""
         INSERT INTO carreras (nombre, universidad)
         VALUES ('Licenciatura en Psicología', 'UdeMM')

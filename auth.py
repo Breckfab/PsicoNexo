@@ -3,6 +3,10 @@ import streamlit as st
 from db import get_conn
 import secrets
 
+# ─── Rate limiting de login ─────────────────────────────────────────────────
+MAX_INTENTOS_FALLIDOS = 5
+VENTANA_MINUTOS = 15
+
 def hash_password(password):
     return bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
 
@@ -52,20 +56,55 @@ def register_user(email, password, nombre, carrera_id, codigo):
                     return False, "Ese email ya está registrado."
                 return False, f"Error al registrar: {e}"
 
+# ─── Rate limiting: helpers ─────────────────────────────────────────────────
+
+def _contar_intentos_fallidos_recientes(email):
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT COUNT(*) FROM intentos_login
+                WHERE email = %s AND created_at > NOW() - make_interval(mins => %s);
+            """, (email, VENTANA_MINUTOS))
+            return cur.fetchone()[0]
+
+def _registrar_intento_fallido(email):
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("INSERT INTO intentos_login (email) VALUES (%s);", (email,))
+        conn.commit()
+
+def _limpiar_intentos_fallidos(email):
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM intentos_login WHERE email = %s;", (email,))
+        conn.commit()
+
 def login_user(email, password):
+    email_norm = email.lower().strip()
+
+    intentos = _contar_intentos_fallidos_recientes(email_norm)
+    if intentos >= MAX_INTENTOS_FALLIDOS:
+        return False, (
+            f"Demasiados intentos fallidos. Por seguridad, esperá unos minutos "
+            f"antes de volver a intentar."
+        ), None
+
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 "SELECT id, email, password_hash, nombre, carrera_id, es_admin, legajo FROM usuarios WHERE email = %s;",
-                (email.lower().strip(),)
+                (email_norm,)
             )
             user = cur.fetchone()
 
     if not user:
+        _registrar_intento_fallido(email_norm)
         return False, "Email no encontrado.", None
     if not verify_password(password, user[2]):
+        _registrar_intento_fallido(email_norm)
         return False, "Contraseña incorrecta.", None
 
+    _limpiar_intentos_fallidos(email_norm)
     return True, "Login exitoso.", {
         "id": user[0],
         "email": user[1],

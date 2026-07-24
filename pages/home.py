@@ -4,14 +4,62 @@ from datetime import datetime, date, timedelta
 
 DIA_INDEX = {"Lunes": 0, "Martes": 1, "Miércoles": 2, "Jueves": 3, "Viernes": 4, "Sábado": 5, "Domingo": 6}
 
-def get_cuatrimestre_actual():
-    mes = datetime.now().month
-    if 3 <= mes <= 7:
-        return "1° Cuatrimestre"
-    elif 8 <= mes <= 12:
-        return "2° Cuatrimestre"
-    else:
-        return "2° Cuatrimestre"
+
+def determinar_estado_cuatrimestre(anio_actual, todas_configs):
+    """
+    Determina en qué cuatrimestre está el alumno en base a las FECHAS REALES
+    configuradas por él (⚙️ Configurar fechas del cuatrimestre), en vez de un
+    rango fijo de meses.
+
+    Esto evita el bug de mostrar "1° Cuatrimestre" cuando en realidad ya
+    terminó (por ejemplo, porque el alumno aprobó todo antes de la fecha de
+    fin) y el 2° Cuatrimestre todavía no arrancó.
+
+    Devuelve una tupla:
+    - cuatrimestre_para_query: "1° Cuatrimestre" o "2° Cuatrimestre", el que
+      se usa para buscar las materias que el alumno está cursando.
+    - header_texto: texto a mostrar en el encabezado de la sección "Cursando".
+    - en_transicion: True si estamos en un período sin cuatrimestre activo
+      (uno finalizado y el otro sin empezar, o el año ya finalizado), para
+      poder mostrar un mensaje distinto en vez del encabezado normal.
+    """
+    hoy = date.today()
+    config_1 = todas_configs.get((anio_actual, "1° Cuatrimestre"))
+    config_2 = todas_configs.get((anio_actual, "2° Cuatrimestre"))
+
+    cuatri_1_finalizado = config_1 is not None and hoy > config_1[1]
+    cuatri_2_no_empezo = config_2 is None or hoy < config_2[0]
+    cuatri_2_finalizado = config_2 is not None and hoy > config_2[1]
+    cuatri_2_en_curso = config_2 is not None and config_2[0] <= hoy <= config_2[1]
+    cuatri_1_en_curso = config_1 is not None and config_1[0] <= hoy <= config_1[1]
+
+    if cuatri_1_finalizado and cuatri_2_no_empezo:
+        return (
+            "2° Cuatrimestre",
+            "PRIMER CUATRIMESTRE FINALIZADO — SEGUNDO CUATRIMESTRE NO HA COMENZADO AÚN",
+            True,
+        )
+
+    if cuatri_2_finalizado:
+        return (
+            "2° Cuatrimestre",
+            f"AÑO {anio_actual} FINALIZADO",
+            True,
+        )
+
+    if cuatri_2_en_curso:
+        return "2° Cuatrimestre", f"2° Cuatrimestre {anio_actual}", False
+
+    if cuatri_1_en_curso:
+        return "1° Cuatrimestre", f"1° Cuatrimestre {anio_actual}", False
+
+    # Sin fechas configuradas todavía para ninguno de los dos: fallback al
+    # heurístico anterior por mes, para no dejar al alumno sin nada mientras
+    # carga las fechas por primera vez.
+    mes = hoy.month
+    cuatri_fallback = "1° Cuatrimestre" if 3 <= mes <= 7 else "2° Cuatrimestre"
+    return cuatri_fallback, f"{cuatri_fallback} {anio_actual}", False
+
 
 # ─── Configuración de cuatrimestre ────────────────────────────────────────────
 
@@ -541,7 +589,6 @@ def mostrar(usuario):
     st.title("🧠 PsicoNexo")
     st.markdown(f"### Bienvenido/a, {usuario['nombre'].split()[0]} 👋")
 
-    cuatrimestre_actual = get_cuatrimestre_actual()
     mes_actual = datetime.now().month
     anio_actual = datetime.now().year if mes_actual >= 3 else datetime.now().year - 1
 
@@ -552,6 +599,13 @@ def mostrar(usuario):
     # Stats + configs en 1 roundtrip
     total, aprobadas, cursando, regulares, desaprobadas, avance, todas_configs = get_home_data(
         usuario["id"], usuario["carrera_id"]
+    )
+
+    # Cuatrimestre "actual" en base a las FECHAS REALES configuradas por el
+    # alumno (no a un rango fijo de meses), para reflejar bien casos como
+    # haber aprobado todo el 1er cuatrimestre antes de que arranque el 2do.
+    cuatrimestre_para_query, header_cuatrimestre, en_transicion = determinar_estado_cuatrimestre(
+        anio_actual, todas_configs
     )
 
     col1, col2, col3, col4, col5 = st.columns(5)
@@ -572,14 +626,19 @@ def mostrar(usuario):
 
     st.markdown("---")
 
-    mostrar_config_fechas(usuario["id"], anio_actual, cuatrimestre_actual, todas_configs)
+    mostrar_config_fechas(usuario["id"], anio_actual, cuatrimestre_para_query, todas_configs)
     mostrar_config_feriados(usuario["id"])
 
     st.markdown("---")
 
-    st.markdown(f"### 📚 Cursando — {cuatrimestre_actual} {anio_actual}")
+    if en_transicion:
+        st.markdown("### 📚 Cursando")
+        st.info(f"⏸️ **{header_cuatrimestre}**")
+    else:
+        st.markdown(f"### 📚 Cursando — {header_cuatrimestre}")
+
     materias_cursando = get_materias_cursando_con_notas(
-        usuario["id"], anio_actual, cuatrimestre_actual
+        usuario["id"], anio_actual, cuatrimestre_para_query
     )
     faltas_map = get_faltas_por_materia(usuario["id"])
     feriados_set = {f[1] for f in get_feriados(usuario["id"])}

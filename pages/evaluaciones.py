@@ -29,6 +29,10 @@ def get_evaluaciones(usuario_id, materia_id):
             return cur.fetchall()
 
 def agregar_evaluacion(usuario_id, materia_id, tipo, descripcion, nota, fecha, aprobado):
+    # Redondeo defensivo a 2 decimales: la columna ya es NUMERIC(4,2), pero
+    # normalizamos acá también para que la nota que se usa en cálculos en
+    # memoria (promedios, etc.) coincida siempre con la que quedó guardada.
+    nota = round(float(nota), 2) if nota is not None else None
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute("""
@@ -39,6 +43,7 @@ def agregar_evaluacion(usuario_id, materia_id, tipo, descripcion, nota, fecha, a
     get_evaluaciones.clear()
 
 def actualizar_evaluacion(eval_id, descripcion, nota, fecha, aprobado):
+    nota = round(float(nota), 2) if nota is not None else None
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute("""
@@ -121,7 +126,7 @@ def mostrar(usuario):
                                 )
                                 nueva_nota = st.number_input(
                                     "Nota",
-                                    min_value=0.0, max_value=10.0, step=0.25,
+                                    min_value=0.0, max_value=10.0, step=0.01, format="%.2f",
                                     value=float(enota) if enota is not None else 0.0,
                                     key=f"nota_{eid}"
                                 )
@@ -156,7 +161,7 @@ def mostrar(usuario):
                         col1, col2, col3 = st.columns([4, 1, 1])
                         with col1:
                             desc_text = edesc if edesc else tipo
-                            nota_text = f"**{enota}**" if enota is not None else "Sin nota"
+                            nota_text = f"**{enota:.2f}**" if enota is not None else "Sin nota"
                             fecha_text = str(efecha) if efecha else "Sin fecha"
                             aprobado_icon = "✅" if eaprobado else "❌"
                             st.markdown(f"{aprobado_icon} {desc_text} — Nota: {nota_text} — Fecha: {fecha_text}")
@@ -189,7 +194,7 @@ def mostrar(usuario):
             with st.expander(f"➕ Agregar {tipo}"):
                 with st.form(f"form_{tipo.replace(' ', '_')}_{materia_id}"):
                     descripcion = st.text_input("Descripción (ej: Parcial 1, TP N°2)")
-                    nota = st.number_input("Nota", min_value=0.0, max_value=10.0, step=0.25, value=0.0)
+                    nota = st.number_input("Nota", min_value=0.0, max_value=10.0, step=0.01, format="%.2f", value=0.0)
                     fecha = st.date_input("Fecha", value=date.today())
                     aprobado = st.checkbox("¿Aprobado? (marcá si la nota es ≥ 6)", value=False)
                     submit = st.form_submit_button("💾 Guardar", use_container_width=True)

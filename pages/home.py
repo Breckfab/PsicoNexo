@@ -680,11 +680,12 @@ def mostrar(usuario):
                     col1, col2, col3 = st.columns(3)
                     with col1:
                         color_prom = "#2ecc71" if promedio and promedio >= 6 else "#e74c3c"
+                        promedio_text = f"{float(promedio):.2f}" if promedio is not None else "—"
                         st.markdown(
                             f"<div style='text-align:center;'>"
                             f"<div style='font-size:11px; color:#aaa;'>Promedio</div>"
                             f"<div style='font-size:24px; font-weight:bold; color:{color_prom};'>"
-                            f"{promedio}</div></div>",
+                            f"{promedio_text}</div></div>",
                             unsafe_allow_html=True
                         )
                     with col2:

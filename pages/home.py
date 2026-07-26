@@ -1,8 +1,7 @@
 import streamlit as st
 from db import get_conn, get_feriados, agregar_feriado, borrar_feriado
 from datetime import datetime, date, timedelta
-
-DIA_INDEX = {"Lunes": 0, "Martes": 1, "Miércoles": 2, "Jueves": 3, "Viernes": 4, "Sábado": 5, "Domingo": 6}
+from utils import DIA_INDEX, contar_clases_en_rango, clasificar_asistencia
 
 
 def determinar_estado_cuatrimestre(anio_actual, todas_configs):
@@ -127,33 +126,6 @@ def get_faltas_por_materia(usuario_id):
             """, (usuario_id,))
             return {r[0]: r[1] for r in cur.fetchall()}
 
-def contar_clases_en_rango(dias_str, fecha_inicio, fecha_fin, feriados=None):
-    """Cuenta cuántas veces caen los días de cursada dentro del rango de fechas.
-    `feriados`, si se pasa, es un set/conjunto de fechas (date) que se descuentan
-    del conteo aunque coincidan con un día de cursada."""
-    if not dias_str or not fecha_inicio or not fecha_fin or fecha_fin < fecha_inicio:
-        return 0
-    dias_lista = [d.strip() for d in dias_str.split(",") if d.strip()]
-    indices = {DIA_INDEX[d] for d in dias_lista if d in DIA_INDEX}
-    if not indices:
-        return 0
-    feriados = feriados or set()
-    total = 0
-    fecha = fecha_inicio
-    while fecha <= fecha_fin:
-        if fecha.weekday() in indices and fecha not in feriados:
-            total += 1
-        fecha += timedelta(days=1)
-    return total
-
-def clasificar_asistencia(porcentaje):
-    """Devuelve (color, negrita) según qué tan cerca está el alumno del límite del 75%."""
-    if porcentaje >= 85:
-        return "#2ecc71", False
-    elif porcentaje >= 75:
-        return "#f0c000", True
-    else:
-        return "#e74c3c", True
 
 # ─── Batch query principal ─────────────────────────────────────────────────────
 

@@ -1,16 +1,8 @@
 import streamlit as st
 from db import get_conn
+from utils import NOMBRES_ANIO, COLORES
 
 ESTADOS = ["pendiente", "cursando", "regular", "promocionada", "aprobada", "desaprobada"]
-
-COLORES = {
-    "pendiente": "⬜",
-    "cursando": "🟡",
-    "regular": "🟠",
-    "promocionada": "🟢",
-    "aprobada": "🟢",
-    "desaprobada": "🔴",
-}
 
 @st.cache_data(ttl=300)
 def get_materias_con_estado(usuario_id, carrera_id):
@@ -300,10 +292,8 @@ def mostrar(usuario):
                 por_anio[anio] = []
             por_anio[anio].append(m)
 
-        nombres_anio = {1: "1° Año", 2: "2° Año", 3: "3° Año", 4: "4° Año", 5: "5° Año"}
-
         for anio, lista in por_anio.items():
-            st.subheader(nombres_anio.get(anio, f"Año {anio}"))
+            st.subheader(NOMBRES_ANIO.get(anio, f"Año {anio}"))
 
             for m in lista:
                 mid, codigo, nombre, _, cuatri, final_oblig, es_electiva, estado = m

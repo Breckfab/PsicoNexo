@@ -1,5 +1,6 @@
 import streamlit as st
 from db import get_conn
+from utils import NOMBRES_ANIO
 
 TIPOS = ["Bibliografía", "Apunte", "NotebookLM", "Otro"]
 
@@ -80,8 +81,7 @@ def mostrar(usuario):
         st.warning("No hay materias disponibles.")
         return
 
-    nombres_anio = {1: "1° Año", 2: "2° Año", 3: "3° Año", 4: "4° Año", 5: "5° Año"}
-    opciones = {f"{nombres_anio.get(m[2], '')} — {m[1]}": m[0] for m in materias}
+    opciones = {f"{NOMBRES_ANIO.get(m[2], '')} — {m[1]}": m[0] for m in materias}
 
     opciones_lista = ["Elegí una materia"] + list(opciones.keys())
     materia_label = st.selectbox("Seleccioná una materia", opciones_lista, index=0)

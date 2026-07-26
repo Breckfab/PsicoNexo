@@ -1,5 +1,6 @@
 import streamlit as st
 from db import get_conn
+from utils import NOMBRES_ANIO
 
 VALORACIONES = ["Recomendado", "No recomendado"]
 
@@ -89,7 +90,6 @@ def mostrar(usuario):
                         por_profesor[profesor] = []
                     por_profesor[profesor].append(op)
 
-                nombres_anio = {1: "1° Año", 2: "2° Año", 3: "3° Año", 4: "4° Año", 5: "5° Año"}
 
                 for profesor, ops in por_profesor.items():
                     recomendados = sum(1 for o in ops if o[2] == "Recomendado")
@@ -99,7 +99,7 @@ def mostrar(usuario):
                         for op in ops:
                             oid, _, valoracion, observaciones, materia_nombre, materia_anio = op
                             key_edit_op = f"editando_opinion_{oid}"
-                            anio_texto = nombres_anio.get(materia_anio, f"Año {materia_anio}")
+                            anio_texto = NOMBRES_ANIO.get(materia_anio, f"Año {materia_anio}")
 
                             if st.session_state.get(key_edit_op):
                                 # ── Formulario de edición inline ──────────────────
@@ -152,9 +152,8 @@ def mostrar(usuario):
                         st.markdown("---")
 
     with tab2:
-        nombres_anio_map = {1: "1° Año", 2: "2° Año", 3: "3° Año", 4: "4° Año", 5: "5° Año"}
         todas = get_todas_materias(usuario["carrera_id"])
-        opciones = {f"{nombres_anio_map.get(m[2], '')} — {m[1]}": m[0] for m in todas}
+        opciones = {f"{NOMBRES_ANIO.get(m[2], '')} — {m[1]}": m[0] for m in todas}
 
         opciones_lista = ["Elegí una materia"] + list(opciones.keys())
 

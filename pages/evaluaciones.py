@@ -1,6 +1,7 @@
 import streamlit as st
 from db import get_conn
 from datetime import date
+from utils import NOMBRES_ANIO
 
 TIPOS = ["Parcial", "Trabajo Práctico", "Recuperatorio", "Reincorporatorio", "Final"]
 
@@ -67,9 +68,8 @@ def mostrar(usuario):
         return
     st.title("📝 Notas y Evaluaciones")
 
-    nombres_anio = {1: "1° Año", 2: "2° Año", 3: "3° Año", 4: "4° Año", 5: "5° Año"}
     todas = get_todas_materias(usuario["carrera_id"])
-    opciones = {f"{nombres_anio.get(m[2], '')} — {m[1]}": (m[0], m[3]) for m in todas}
+    opciones = {f"{NOMBRES_ANIO.get(m[2], '')} — {m[1]}": (m[0], m[3]) for m in todas}
 
     opciones_lista = ["Elegí una materia"] + list(opciones.keys())
     materia_label = st.selectbox("Seleccioná una materia", opciones_lista, index=0)

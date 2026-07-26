@@ -1,6 +1,7 @@
 import streamlit as st
 from db import get_conn, get_feriados
 from datetime import datetime, date, timedelta
+import re
 
 MODALIDADES = ["Presencial", "Híbrida", "Asincrónica"]
 TURNOS = ["Mañana", "Tarde", "Noche"]
@@ -8,6 +9,74 @@ CUATRIMESTRES = ["1° Cuatrimestre", "2° Cuatrimestre", "Anual"]
 DIAS = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado"]
 
 DIA_INDEX = {"Lunes": 0, "Martes": 1, "Miércoles": 2, "Jueves": 3, "Viernes": 4, "Sábado": 5, "Domingo": 6}
+
+
+def normalizar_horario(texto):
+    """
+    Intenta interpretar `texto` como una hora y devolverla siempre en formato
+    "HH:MM" (24hs), sin importar cómo la haya tipeado el alumno.
+
+    Formatos soportados:
+    - "18:30", "18.30", "18,30", "18 30", "1830" → "18:30"
+    - "18" (solo la hora)                        → "18:00"
+    - "6:30 pm", "6:30pm", "6pm", "6 am"          → 24hs equivalente
+
+    Devuelve:
+    - "" si el texto viene vacío (el horario es opcional).
+    - El horario normalizado "HH:MM" si se pudo interpretar.
+    - None si el texto no es vacío pero no se pudo interpretar como hora
+      válida (el llamador debe mostrar un error y no guardar).
+    """
+    if texto is None:
+        return ""
+    texto = texto.strip()
+    if not texto:
+        return ""
+
+    t = texto.lower().replace(" ", "")
+
+    # ── Detectar am/pm ──────────────────────────────────────────────
+    es_pm = False
+    es_am = False
+    if t.endswith("pm"):
+        es_pm = True
+        t = t[:-2]
+    elif t.endswith("am"):
+        es_am = True
+        t = t[:-2]
+
+    if not t:
+        return None
+
+    # ── Separador explícito: ":", ".", "," ─────────────────────────
+    match = re.match(r"^(\d{1,2})[:.,](\d{1,2})$", t)
+    if match:
+        hora, minuto = int(match.group(1)), int(match.group(2))
+    else:
+        # ── Solo dígitos: "18", "1830", "830" ──────────────────────
+        match = re.match(r"^(\d{1,4})$", t)
+        if not match:
+            return None
+        digitos = match.group(1)
+        if len(digitos) <= 2:
+            hora, minuto = int(digitos), 0
+        elif len(digitos) == 3:
+            hora, minuto = int(digitos[0]), int(digitos[1:])
+        else:
+            hora, minuto = int(digitos[:2]), int(digitos[2:])
+
+    if minuto > 59:
+        return None
+
+    if es_pm and hora < 12:
+        hora += 12
+    if es_am and hora == 12:
+        hora = 0
+
+    if hora > 23:
+        return None
+
+    return f"{hora:02d}:{minuto:02d}"
 
 @st.cache_data(ttl=60)
 def get_materias_cursando(usuario_id, carrera_id):
@@ -517,17 +586,21 @@ def mostrar(usuario):
                                 with col2:
                                     cancelar = st.form_submit_button("❌ Cancelar", use_container_width=True)
                             if guardar:
-                                if e_anio != anio or e_cuatri != cuatri:
-                                    # Año o cuatrimestre cambiaron: son parte de la clave única
-                                    # de "cursadas", así que el guardado de abajo insertaría una
-                                    # fila nueva y dejaría la vieja huérfana con datos desactualizados.
-                                    # Hay que borrar la fila original primero (mismo patrón que se
-                                    # usa para feriados en home.py).
-                                    borrar_cursada_especifica(usuario["id"], mid, anio, cuatri)
-                                guardar_cursada(usuario["id"], mid, e_anio, e_cuatri, e_modalidad, e_turno, ", ".join(e_dias), e_horario, e_link, e_prof1, e_email_prof1, e_prof2, e_email_prof2)
-                                st.session_state[f"editando_cursada_{mid}"] = False
-                                st.success("Cursada actualizada.")
-                                st.rerun()
+                                e_horario_norm = normalizar_horario(e_horario)
+                                if e_horario_norm is None:
+                                    st.error("⏰ Formato de horario no reconocido. Usá HH:MM, ej: 18:30")
+                                else:
+                                    if e_anio != anio or e_cuatri != cuatri:
+                                        # Año o cuatrimestre cambiaron: son parte de la clave única
+                                        # de "cursadas", así que el guardado de abajo insertaría una
+                                        # fila nueva y dejaría la vieja huérfana con datos desactualizados.
+                                        # Hay que borrar la fila original primero (mismo patrón que se
+                                        # usa para feriados en home.py).
+                                        borrar_cursada_especifica(usuario["id"], mid, anio, cuatri)
+                                    guardar_cursada(usuario["id"], mid, e_anio, e_cuatri, e_modalidad, e_turno, ", ".join(e_dias), e_horario_norm, e_link, e_prof1, e_email_prof1, e_prof2, e_email_prof2)
+                                    st.session_state[f"editando_cursada_{mid}"] = False
+                                    st.success("Cursada actualizada.")
+                                    st.rerun()
                             if cancelar:
                                 st.session_state[f"editando_cursada_{mid}"] = False
                                 st.rerun()
@@ -568,12 +641,16 @@ def mostrar(usuario):
             submit = st.form_submit_button("💾 Guardar cursada", use_container_width=True)
 
         if submit:
-            materia_id = opciones[materia_label]
-            dias_str = ", ".join(dias_sel) if dias_sel else ""
-            guardar_cursada(usuario["id"], materia_id, anio, cuatrimestre, modalidad, turno, dias_str, horario, link, profesor1, email_profesor1, profesor2, email_profesor2)
-            st.session_state.form_cursada_key += 1
-            st.success("✅ Cursada guardada correctamente.")
-            st.rerun()
+            horario_norm = normalizar_horario(horario)
+            if horario_norm is None:
+                st.error("⏰ Formato de horario no reconocido. Usá HH:MM, ej: 18:30")
+            else:
+                materia_id = opciones[materia_label]
+                dias_str = ", ".join(dias_sel) if dias_sel else ""
+                guardar_cursada(usuario["id"], materia_id, anio, cuatrimestre, modalidad, turno, dias_str, horario_norm, link, profesor1, email_profesor1, profesor2, email_profesor2)
+                st.session_state.form_cursada_key += 1
+                st.success("✅ Cursada guardada correctamente.")
+                st.rerun()
 
     with tab3:
         st.subheader("📌 Tareas por materia")

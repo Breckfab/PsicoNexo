@@ -1,14 +1,13 @@
 import streamlit as st
 from db import get_conn, get_feriados
-from datetime import datetime, date, timedelta
+from datetime import datetime, date
 import re
+from utils import NOMBRES_ANIO, DIA_INDEX, contar_clases_en_rango, clasificar_asistencia
 
 MODALIDADES = ["Presencial", "Híbrida", "Asincrónica"]
 TURNOS = ["Mañana", "Tarde", "Noche"]
 CUATRIMESTRES = ["1° Cuatrimestre", "2° Cuatrimestre", "Anual"]
 DIAS = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado"]
-
-DIA_INDEX = {"Lunes": 0, "Martes": 1, "Miércoles": 2, "Jueves": 3, "Viernes": 4, "Sábado": 5, "Domingo": 6}
 
 
 def normalizar_horario(texto):
@@ -294,34 +293,6 @@ def actualizar_falta(falta_id, fecha, justificada):
         conn.commit()
     get_faltas_materia.clear()
 
-def contar_clases_en_rango(dias_str, fecha_inicio, fecha_fin, feriados=None):
-    """Cuenta cuántas veces caen los días de cursada dentro del rango de fechas.
-    `feriados`, si se pasa, es un set/conjunto de fechas (date) que se descuentan
-    del conteo aunque coincidan con un día de cursada."""
-    if not dias_str or not fecha_inicio or not fecha_fin or fecha_fin < fecha_inicio:
-        return 0
-    dias_lista = [d.strip() for d in dias_str.split(",") if d.strip()]
-    indices = {DIA_INDEX[d] for d in dias_lista if d in DIA_INDEX}
-    if not indices:
-        return 0
-    feriados = feriados or set()
-    total = 0
-    fecha = fecha_inicio
-    while fecha <= fecha_fin:
-        if fecha.weekday() in indices and fecha not in feriados:
-            total += 1
-        fecha += timedelta(days=1)
-    return total
-
-def clasificar_asistencia(porcentaje):
-    """Devuelve (color, negrita) según qué tan cerca está el alumno del límite del 75%."""
-    if porcentaje >= 85:
-        return "#2ecc71", False
-    elif porcentaje >= 75:
-        return "#f0c000", True
-    else:
-        return "#e74c3c", True
-
 def calcular_asistencia(usuario_id, materia_id, dias_str, anio_cursada, cuatrimestre, feriados=None):
     config = get_config_cuatrimestre_materia(usuario_id, anio_cursada, cuatrimestre)
     if not config:
@@ -483,7 +454,6 @@ def mostrar(usuario):
 
     st.markdown("---")
 
-    nombres_anio = {1: "1° Año", 2: "2° Año", 3: "3° Año", 4: "4° Año", 5: "5° Año"}
     tab1, tab2, tab3 = st.tabs(["📋 Mis cursadas", "➕ Registrar cursada", "📌 Tareas"])
 
     with tab1:
@@ -499,7 +469,7 @@ def mostrar(usuario):
                 cursada = todas_cursadas.get(mid)
                 programa_link = todos_programas.get(mid)
 
-                with st.expander(f"{nombres_anio.get(manio, '')} — {mnombre}"):
+                with st.expander(f"{NOMBRES_ANIO.get(manio, '')} — {mnombre}"):
                     if cursada:
                         cid, anio, cuatri, modalidad, dias, horario, link, prof1, email_prof1, prof2, email_prof2, turno = cursada
                         col1, col2 = st.columns(2)
@@ -611,8 +581,7 @@ def mostrar(usuario):
 
     with tab2:
         todas = get_todas_materias(usuario["carrera_id"])
-        nombres_anio_map = {1: "1° Año", 2: "2° Año", 3: "3° Año", 4: "4° Año", 5: "5° Año"}
-        opciones = {f"{nombres_anio_map.get(m[2], '')} — {m[1]}": m[0] for m in todas}
+        opciones = {f"{NOMBRES_ANIO.get(m[2], '')} — {m[1]}": m[0] for m in todas}
 
         if "form_cursada_key" not in st.session_state:
             st.session_state.form_cursada_key = 0
@@ -658,8 +627,7 @@ def mostrar(usuario):
         if not materias_cursando:
             st.info("No tenés materias cursando.")
         else:
-            nombres_anio_map2 = {1: "1° Año", 2: "2° Año", 3: "3° Año", 4: "4° Año", 5: "5° Año"}
-            opciones_tareas = {f"{nombres_anio_map2.get(m[2], '')} — {m[1]}": m[0] for m in materias_cursando}
+            opciones_tareas = {f"{NOMBRES_ANIO.get(m[2], '')} — {m[1]}": m[0] for m in materias_cursando}
             materia_tarea_label = st.selectbox("Materia", list(opciones_tareas.keys()), key="sel_tarea")
             materia_tarea_id = opciones_tareas[materia_tarea_label]
 

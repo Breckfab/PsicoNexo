@@ -7,6 +7,7 @@ from reportlab.lib.units import cm
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.enums import TA_CENTER
+from utils import NOMBRES_ANIO, CUATRI_TEXTO, COLORES
 
 @st.cache_data(ttl=60)
 def get_historial(usuario_id, carrera_id):
@@ -36,15 +37,6 @@ def get_nombre_usuario(usuario_id):
             cur.execute("SELECT nombre FROM usuarios WHERE id = %s;", (usuario_id,))
             row = cur.fetchone()
     return row[0] if row else "Alumno"
-
-CUATRI_TEXTO = {
-    "1": "1° Cuat.",
-    "2": "2° Cuat.",
-    "anual": "Anual",
-    "1° Cuatrimestre": "1° Cuat.",
-    "2° Cuatrimestre": "2° Cuat.",
-    "Anual": "Anual",
-}
 
 def generar_pdf(historial, nombre_alumno, filtros):
     buffer = BytesIO()
@@ -82,7 +74,6 @@ def generar_pdf(historial, nombre_alumno, filtros):
         spaceAfter=2
     )
 
-    nombres_anio = {1: "1° Año", 2: "2° Año", 3: "3° Año", 4: "4° Año", 5: "5° Año"}
 
     elementos = []
     elementos.append(Paragraph("PsicoNexo", titulo_style))
@@ -109,7 +100,7 @@ def generar_pdf(historial, nombre_alumno, filtros):
 
     for h in historial:
         mnombre, manio, mcuatri, estado, anio_cursada, cuatri_cursada, profesor1, promedio = h
-        anio_texto = nombres_anio.get(manio, "Año " + str(manio))
+        anio_texto = NOMBRES_ANIO.get(manio, "Año " + str(manio))
         if anio_cursada and cuatri_cursada:
             cuatri_corto = CUATRI_TEXTO.get(cuatri_cursada, cuatri_cursada)
             cursada_texto = str(anio_cursada) + " - " + cuatri_corto
@@ -164,8 +155,7 @@ def mostrar(usuario):
         filtro_estado = st.selectbox("Filtrar por estado", ["Todos"] + estados_disponibles)
     with col2:
         anios_disponibles = sorted(set(h[1] for h in historial))
-        nombres_anio = {1: "1° Año", 2: "2° Año", 3: "3° Año", 4: "4° Año", 5: "5° Año"}
-        anios_opciones = ["Todos"] + [nombres_anio.get(a, str(a)) for a in anios_disponibles]
+        anios_opciones = ["Todos"] + [NOMBRES_ANIO.get(a, str(a)) for a in anios_disponibles]
         filtro_anio = st.selectbox("Filtrar por año de la carrera", anios_opciones)
     with col3:
         cuatris_disponibles = sorted(set(h[2] for h in historial if h[2]))
@@ -175,7 +165,7 @@ def mostrar(usuario):
     if filtro_estado != "Todos":
         resultado = [h for h in resultado if h[3] == filtro_estado]
     if filtro_anio != "Todos":
-        anio_num = [k for k, v in nombres_anio.items() if v == filtro_anio]
+        anio_num = [k for k, v in NOMBRES_ANIO.items() if v == filtro_anio]
         if anio_num:
             resultado = [h for h in resultado if h[1] == anio_num[0]]
     if filtro_cuatri != "Todos":
@@ -203,18 +193,10 @@ def mostrar(usuario):
             use_container_width=True
         )
 
-    COLORES = {
-        "cursando": "🟡",
-        "regular": "🟠",
-        "promocionada": "🟢",
-        "aprobada": "🟢",
-        "desaprobada": "🔴",
-    }
-
     for h in resultado:
         mnombre, manio, mcuatri, estado, anio_cursada, cuatri_cursada, profesor1, promedio = h
         icono = COLORES.get(estado, "⬜")
-        anio_texto = nombres_anio.get(manio, "Año " + str(manio))
+        anio_texto = NOMBRES_ANIO.get(manio, "Año " + str(manio))
         cuatri_texto = CUATRI_TEXTO.get(mcuatri, mcuatri)
 
         col1, col2, col3, col4 = st.columns([3, 1, 1, 1])

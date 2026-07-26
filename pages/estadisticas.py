@@ -1,10 +1,7 @@
 import streamlit as st
 import pandas as pd
 from db import get_conn
-
-NOMBRES_ANIO = {1: "1° Año", 2: "2° Año", 3: "3° Año", 4: "4° Año", 5: "5° Año"}
-ORDEN_CUATRI = {"1° Cuatrimestre": 1, "2° Cuatrimestre": 2, "Anual": 3,
-                "1": 1, "2": 2, "anual": 3}
+from utils import NOMBRES_ANIO, ORDEN_CUATRI, CUATRI_TEXTO
 
 @st.cache_data(ttl=60)
 def get_avance_carrera(usuario_id, carrera_id):
@@ -118,13 +115,11 @@ def mostrar(usuario):
     if not evol_rows:
         st.info("Todavía no tenés notas cargadas con cursadas asociadas.")
     else:
-        cuatri_texto = {"1": "1° Cuat.", "2": "2° Cuat.", "anual": "Anual",
-                         "1° Cuatrimestre": "1° Cuat.", "2° Cuatrimestre": "2° Cuat.", "Anual": "Anual"}
         filas_ordenadas = sorted(evol_rows, key=lambda r: (r[0], ORDEN_CUATRI.get(r[1], 9)))
 
         etiquetas, valores = [], []
         for anio_c, cuatri, promedio in filas_ordenadas:
-            etiquetas.append(f"{cuatri_texto.get(cuatri, cuatri)} {anio_c}")
+            etiquetas.append(f"{CUATRI_TEXTO.get(cuatri, cuatri)} {anio_c}")
             valores.append(round(float(promedio), 2))
 
         df_evol = pd.DataFrame({"Promedio": valores}, index=etiquetas)

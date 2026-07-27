@@ -613,8 +613,14 @@ def mostrar(usuario):
 
         st.markdown("### 📅 Elegí el Año y la Materia")
 
+        # Placeholder "Elegí una materia" como opción por defecto (ítem de
+        # prioridad máxima, 27/07/2026), mismo patrón que ya se usa en
+        # evaluaciones.py y recursos.py, para que el alumno no guarde una
+        # cursada sin haber elegido materia explícitamente.
+        opciones_lista = ["Elegí una materia"] + list(opciones.keys())
+
         with st.form(f"form_cursada_{st.session_state.form_cursada_key}"):
-            materia_label = st.selectbox("📚 Materia (ordenada por año)", list(opciones.keys()))
+            materia_label = st.selectbox("📚 Materia (ordenada por año)", opciones_lista, index=0)
             col1, col2 = st.columns(2)
             with col1:
                 anio = st.number_input("Año de cursada", min_value=2000, max_value=2100, value=datetime.now().year)
@@ -645,20 +651,23 @@ def mostrar(usuario):
             submit = st.form_submit_button("💾 Guardar cursada", use_container_width=True)
 
         if submit:
-            horario_norm = normalizar_horario(horario)
-            if horario_norm is None:
-                st.error("⏰ Formato de horario no reconocido. Usá HH:MM, ej: 18:30")
+            if materia_label == "Elegí una materia":
+                st.error("Seleccioná una materia antes de guardar.")
             else:
-                materia_id = opciones[materia_label]
-                dias_str = ", ".join(dias_sel) if dias_sel else ""
-                guardar_cursada(
-                    usuario["id"], materia_id, anio, cuatrimestre, modalidad, turno, dias_str, horario_norm, link,
-                    profesor1, email_profesor1, profesor2, email_profesor2,
-                    fecha_parcial1, fecha_parcial2, fecha_final
-                )
-                st.session_state.form_cursada_key += 1
-                st.success("✅ Cursada guardada correctamente.")
-                st.rerun()
+                horario_norm = normalizar_horario(horario)
+                if horario_norm is None:
+                    st.error("⏰ Formato de horario no reconocido. Usá HH:MM, ej: 18:30")
+                else:
+                    materia_id = opciones[materia_label]
+                    dias_str = ", ".join(dias_sel) if dias_sel else ""
+                    guardar_cursada(
+                        usuario["id"], materia_id, anio, cuatrimestre, modalidad, turno, dias_str, horario_norm, link,
+                        profesor1, email_profesor1, profesor2, email_profesor2,
+                        fecha_parcial1, fecha_parcial2, fecha_final
+                    )
+                    st.session_state.form_cursada_key += 1
+                    st.success("✅ Cursada guardada correctamente.")
+                    st.rerun()
 
     with tab3:
         st.subheader("📌 Tareas por materia")
@@ -744,4 +753,3 @@ def mostrar(usuario):
                         guardar_tarea(usuario["id"], materia_tarea_id, nuevo_num, desc, fecha)
                         st.session_state[key_nueva] += 1
                         st.rerun()
-                        

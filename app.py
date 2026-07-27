@@ -209,14 +209,14 @@ def mostrar_navbar(usuario):
         </div>
     """, unsafe_allow_html=True)
 
-    items = ["🏠 Inicio", "📚 Plan de Estudios", "🗓️ Cursadas", "📝 Notas", "📂 Recursos", "⭐ Profesores", "📊 Estadísticas", "👤 Mi Perfil"]
+    items = ["🏠 Inicio", "📚 Plan de Estudios", "🗓️ Materias", "📝 Notas", "📂 Recursos", "⭐ Profesores", "📊 Estadísticas", "👤 Mi Perfil"]
     if usuario.get("es_admin"):
         items.append("🔧 Administración")
 
     paginas = {
         "🏠 Inicio": "home",
         "📚 Plan de Estudios": "materias",
-        "🗓️ Cursadas": "cursadas",
+        "🗓️ Materias": "cursadas",
         "📝 Notas": "evaluaciones",
         "📂 Recursos": "recursos",
         "⭐ Profesores": "profesores",

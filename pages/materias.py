@@ -1,6 +1,6 @@
 import streamlit as st
 from db import get_conn
-from utils import NOMBRES_ANIO, COLORES
+from utils import NOMBRES_ANIO, COLORES, convertir_link_preview
 
 ESTADOS = ["pendiente", "cursando", "regular", "promocionada", "aprobada", "desaprobada"]
 
@@ -93,21 +93,6 @@ def borrar_programa(usuario_id, materia_id):
             """, (usuario_id, materia_id))
         conn.commit()
     get_todos_programas.clear()
-
-def convertir_link_preview(link):
-    if "drive.google.com" in link and "/file/d/" in link:
-        try:
-            file_id = link.split("/file/d/")[1].split("/")[0]
-            return f"https://drive.google.com/file/d/{file_id}/preview"
-        except:
-            return None
-    if "dropbox.com" in link:
-        try:
-            url = link.split("?")[0]
-            return f"{url}?raw=1"
-        except:
-            return None
-    return None
 
 def render_mapa_correlativas(materias, arcos):
     """Genera el HTML del grafo interactivo con vis-network."""
@@ -457,3 +442,4 @@ def mostrar(usuario):
         col3.metric("📖 Cursando", cursando_c)
         col4.metric("⏳ Pendientes", pendientes_c)
         col5.metric("❌ Desaprobadas", desap_c)
+

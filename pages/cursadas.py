@@ -744,3 +744,4 @@ def mostrar(usuario):
                         guardar_tarea(usuario["id"], materia_tarea_id, nuevo_num, desc, fecha)
                         st.session_state[key_nueva] += 1
                         st.rerun()
+                        

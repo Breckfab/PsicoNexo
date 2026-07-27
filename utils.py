@@ -12,6 +12,19 @@ y la lógica son exactamente los mismos que ya estaban en uso.
 """
 
 from datetime import timedelta
+import logging
+
+# ─── Logging centralizado ───────────────────────────────────────────────────
+# Antes, varios "except:" en el código atrapaban cualquier error y devolvían
+# None en silencio (por ejemplo al convertir links de Drive/Dropbox), sin dejar
+# rastro de qué falló ni por qué. Con este logger, esos casos quedan
+# registrados (visibles en los logs de Streamlit Cloud) en vez de desaparecer.
+logger = logging.getLogger("psiconexo")
+if not logger.handlers:
+    logging.basicConfig(
+        level=logging.WARNING,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    )
 
 # ─── Nombres de año de carrera ─────────────────────────────────────────────
 NOMBRES_ANIO = {1: "1° Año", 2: "2° Año", 3: "3° Año", 4: "4° Año", 5: "5° Año"}
@@ -73,3 +86,41 @@ def clasificar_asistencia(porcentaje):
         return "#f0c000", True
     else:
         return "#e74c3c", True
+
+
+# ─── Conversión de links a vista previa (Drive / Dropbox) ──────────────────
+# Esta función estaba duplicada de forma idéntica en cursadas.py (como
+# convertir_link_drive, solo con el caso de Drive), materias.py y recursos.py
+# (con Drive + Dropbox). Se centraliza acá para evitar que una corrección
+# futura tenga que replicarse en los tres lugares, y además se reemplaza el
+# "except: return None" silencioso por un log de advertencia: antes, si un
+# link tenía un formato inesperado, la función fallaba en silencio y el
+# usuario solo veía que no aparecía el botón de "Ver PDF", sin ninguna pista
+# de qué había pasado.
+def convertir_link_preview(link):
+    """
+    Intenta convertir un link de Google Drive o Dropbox a una URL de vista
+    previa embebible. Devuelve None si el link no es de ninguno de esos
+    servicios, o si tiene un formato inesperado que no se pudo interpretar
+    (en ese caso, queda un warning en el log con el detalle del error).
+    """
+    if not link:
+        return None
+
+    if "drive.google.com" in link and "/file/d/" in link:
+        try:
+            file_id = link.split("/file/d/")[1].split("/")[0]
+            return f"https://drive.google.com/file/d/{file_id}/preview"
+        except Exception as e:
+            logger.warning(f"No se pudo convertir link de Drive a preview: {link!r} — {e}")
+            return None
+
+    if "dropbox.com" in link:
+        try:
+            url = link.split("?")[0]
+            return f"{url}?raw=1"
+        except Exception as e:
+            logger.warning(f"No se pudo convertir link de Dropbox a preview: {link!r} — {e}")
+            return None
+
+    return None

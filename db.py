@@ -165,6 +165,19 @@ def init_db():
         );
     """)
 
+    # Fechas opcionales de 1er parcial, 2do parcial y final para la cursada.
+    # Pueden quedar vacías al registrar la cursada y completarse después
+    # (ítem 1 de "Cosas por Hacer" — prioridad máxima, 27/07/2026).
+    cur.execute("""
+        ALTER TABLE cursadas ADD COLUMN IF NOT EXISTS fecha_parcial1 DATE;
+    """)
+    cur.execute("""
+        ALTER TABLE cursadas ADD COLUMN IF NOT EXISTS fecha_parcial2 DATE;
+    """)
+    cur.execute("""
+        ALTER TABLE cursadas ADD COLUMN IF NOT EXISTS fecha_final DATE;
+    """)
+
     cur.execute("""
         CREATE TABLE IF NOT EXISTS evaluaciones (
             id SERIAL PRIMARY KEY,

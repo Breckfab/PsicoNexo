@@ -108,7 +108,8 @@ def get_todas_cursadas(usuario_id):
         with conn.cursor() as cur:
             cur.execute("""
                 SELECT materia_id, id, anio_cursada, cuatrimestre, modalidad, dias, horario, link,
-                       profesor1, email_profesor1, profesor2, email_profesor2, turno
+                       profesor1, email_profesor1, profesor2, email_profesor2, turno,
+                       fecha_parcial1, fecha_parcial2, fecha_final
                 FROM cursadas
                 WHERE usuario_id = %s
                 ORDER BY anio_cursada DESC, id DESC;
@@ -157,20 +158,27 @@ def get_tareas_materia(usuario_id, materia_id):
             """, (usuario_id, materia_id))
             return cur.fetchall()
 
-def guardar_cursada(usuario_id, materia_id, anio, cuatrimestre, modalidad, turno, dias, horario, link, profesor1, email_profesor1, profesor2, email_profesor2):
+def guardar_cursada(usuario_id, materia_id, anio, cuatrimestre, modalidad, turno, dias, horario, link,
+                     profesor1, email_profesor1, profesor2, email_profesor2,
+                     fecha_parcial1=None, fecha_parcial2=None, fecha_final=None):
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute("""
-                INSERT INTO cursadas (usuario_id, materia_id, anio_cursada, cuatrimestre, modalidad, turno, dias, horario, link, profesor1, email_profesor1, profesor2, email_profesor2)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                INSERT INTO cursadas (usuario_id, materia_id, anio_cursada, cuatrimestre, modalidad, turno, dias, horario, link, profesor1, email_profesor1, profesor2, email_profesor2, fecha_parcial1, fecha_parcial2, fecha_final)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (usuario_id, materia_id, anio_cursada, cuatrimestre)
                 DO UPDATE SET modalidad = EXCLUDED.modalidad, turno = EXCLUDED.turno,
                               dias = EXCLUDED.dias, horario = EXCLUDED.horario,
                               link = EXCLUDED.link, profesor1 = EXCLUDED.profesor1,
                               email_profesor1 = EXCLUDED.email_profesor1,
                               profesor2 = EXCLUDED.profesor2,
-                              email_profesor2 = EXCLUDED.email_profesor2;
-            """, (usuario_id, materia_id, anio, cuatrimestre, modalidad, turno, dias, horario, link, profesor1, email_profesor1, profesor2, email_profesor2))
+                              email_profesor2 = EXCLUDED.email_profesor2,
+                              fecha_parcial1 = EXCLUDED.fecha_parcial1,
+                              fecha_parcial2 = EXCLUDED.fecha_parcial2,
+                              fecha_final = EXCLUDED.fecha_final;
+            """, (usuario_id, materia_id, anio, cuatrimestre, modalidad, turno, dias, horario, link,
+                  profesor1, email_profesor1, profesor2, email_profesor2,
+                  fecha_parcial1, fecha_parcial2, fecha_final))
         conn.commit()
     get_todas_cursadas.clear()
     get_clases_hoy.clear()
@@ -462,7 +470,8 @@ def mostrar(usuario):
 
                 with st.expander(f"{NOMBRES_ANIO.get(manio, '')} — {mnombre}"):
                     if cursada:
-                        cid, anio, cuatri, modalidad, dias, horario, link, prof1, email_prof1, prof2, email_prof2, turno = cursada
+                        (cid, anio, cuatri, modalidad, dias, horario, link, prof1, email_prof1, prof2,
+                         email_prof2, turno, fecha_parcial1, fecha_parcial2, fecha_final) = cursada
                         col1, col2 = st.columns(2)
                         with col1:
                             st.markdown(f"**Año:** {anio}")
@@ -482,6 +491,16 @@ def mostrar(usuario):
                                     st.markdown(f"📧 {email_prof2}")
                         if link:
                             st.markdown(f"[🔗 Acceder a la clase]({link})")
+
+                        # ── Fechas de parciales y final ───────────────────
+                        st.markdown("**📆 Fechas de evaluación:**")
+                        col_fp1, col_fp2, col_ff = st.columns(3)
+                        with col_fp1:
+                            st.caption(f"1er Parcial: {fecha_parcial1.strftime('%d/%m/%Y') if fecha_parcial1 else '—'}")
+                        with col_fp2:
+                            st.caption(f"2do Parcial: {fecha_parcial2.strftime('%d/%m/%Y') if fecha_parcial2 else '—'}")
+                        with col_ff:
+                            st.caption(f"Final: {fecha_final.strftime('%d/%m/%Y') if fecha_final else '—'}")
 
                         if programa_link:
                             st.markdown("---")
@@ -541,6 +560,16 @@ def mostrar(usuario):
                                 e_email_prof1 = st.text_input("Email Profesor/a 1", value=email_prof1 or "")
                                 e_prof2 = st.text_input("Profesor/a 2", value=prof2 or "")
                                 e_email_prof2 = st.text_input("Email Profesor/a 2", value=email_prof2 or "")
+
+                                st.markdown("**📆 Fechas de evaluación** _(opcional, se pueden dejar vacías)_")
+                                col_ep1, col_ep2, col_ef = st.columns(3)
+                                with col_ep1:
+                                    e_fecha_parcial1 = st.date_input("1er Parcial", value=fecha_parcial1, key=f"e_fp1_{mid}")
+                                with col_ep2:
+                                    e_fecha_parcial2 = st.date_input("2do Parcial", value=fecha_parcial2, key=f"e_fp2_{mid}")
+                                with col_ef:
+                                    e_fecha_final = st.date_input("Final", value=fecha_final, key=f"e_ff_{mid}")
+
                                 col1, col2 = st.columns(2)
                                 with col1:
                                     guardar = st.form_submit_button("💾 Guardar", use_container_width=True)
@@ -558,7 +587,12 @@ def mostrar(usuario):
                                         # Hay que borrar la fila original primero (mismo patrón que se
                                         # usa para feriados en home.py).
                                         borrar_cursada_especifica(usuario["id"], mid, anio, cuatri)
-                                    guardar_cursada(usuario["id"], mid, e_anio, e_cuatri, e_modalidad, e_turno, ", ".join(e_dias), e_horario_norm, e_link, e_prof1, e_email_prof1, e_prof2, e_email_prof2)
+                                    guardar_cursada(
+                                        usuario["id"], mid, e_anio, e_cuatri, e_modalidad, e_turno,
+                                        ", ".join(e_dias), e_horario_norm, e_link, e_prof1, e_email_prof1,
+                                        e_prof2, e_email_prof2,
+                                        e_fecha_parcial1, e_fecha_parcial2, e_fecha_final
+                                    )
                                     st.session_state[f"editando_cursada_{mid}"] = False
                                     st.success("Cursada actualizada.")
                                     st.rerun()
@@ -598,6 +632,16 @@ def mostrar(usuario):
             with col2:
                 profesor2 = st.text_input("Profesor/a 2 (opcional)")
                 email_profesor2 = st.text_input("Email Profesor/a 2 (opcional)")
+
+            st.markdown("**📆 Fechas de evaluación** _(opcional, se pueden completar más adelante)_")
+            col3, col4, col5 = st.columns(3)
+            with col3:
+                fecha_parcial1 = st.date_input("1er Parcial", value=None)
+            with col4:
+                fecha_parcial2 = st.date_input("2do Parcial", value=None)
+            with col5:
+                fecha_final = st.date_input("Final", value=None)
+
             submit = st.form_submit_button("💾 Guardar cursada", use_container_width=True)
 
         if submit:
@@ -607,7 +651,11 @@ def mostrar(usuario):
             else:
                 materia_id = opciones[materia_label]
                 dias_str = ", ".join(dias_sel) if dias_sel else ""
-                guardar_cursada(usuario["id"], materia_id, anio, cuatrimestre, modalidad, turno, dias_str, horario_norm, link, profesor1, email_profesor1, profesor2, email_profesor2)
+                guardar_cursada(
+                    usuario["id"], materia_id, anio, cuatrimestre, modalidad, turno, dias_str, horario_norm, link,
+                    profesor1, email_profesor1, profesor2, email_profesor2,
+                    fecha_parcial1, fecha_parcial2, fecha_final
+                )
                 st.session_state.form_cursada_key += 1
                 st.success("✅ Cursada guardada correctamente.")
                 st.rerun()
@@ -696,4 +744,3 @@ def mostrar(usuario):
                         guardar_tarea(usuario["id"], materia_tarea_id, nuevo_num, desc, fecha)
                         st.session_state[key_nueva] += 1
                         st.rerun()
-

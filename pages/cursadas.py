@@ -2,7 +2,7 @@ import streamlit as st
 from db import get_conn, get_feriados
 from datetime import datetime, date
 import re
-from utils import NOMBRES_ANIO, DIA_INDEX, contar_clases_en_rango, clasificar_asistencia
+from utils import NOMBRES_ANIO, DIA_INDEX, contar_clases_en_rango, clasificar_asistencia, convertir_link_preview
 
 MODALIDADES = ["Presencial", "Híbrida", "Asincrónica"]
 TURNOS = ["Mañana", "Tarde", "Noche"]
@@ -229,15 +229,6 @@ def borrar_tarea(tarea_id):
             cur.execute("DELETE FROM tareas WHERE id = %s;", (tarea_id,))
         conn.commit()
     get_tareas_materia.clear()
-
-def convertir_link_drive(link):
-    if "drive.google.com" in link and "/file/d/" in link:
-        try:
-            file_id = link.split("/file/d/")[1].split("/")[0]
-            return f"https://drive.google.com/file/d/{file_id}/preview"
-        except:
-            return None
-    return None
 
 # ─── Asistencia ────────────────────────────────────────────────────────────
 
@@ -498,13 +489,13 @@ def mostrar(usuario):
                             with col_prog1:
                                 st.markdown(f"[📋 Ver programa]({programa_link})")
                             with col_prog2:
-                                preview_url = convertir_link_drive(programa_link)
+                                preview_url = convertir_link_preview(programa_link)
                                 if preview_url:
                                     if st.button("👁️ Ver PDF", key=f"pdf_prog_cursada_{mid}", use_container_width=True):
                                         st.session_state[f"viendo_pdf_cursada_{mid}"] = not st.session_state.get(f"viendo_pdf_cursada_{mid}", False)
                                         st.rerun()
-                            if st.session_state.get(f"viendo_pdf_cursada_{mid}") and convertir_link_drive(programa_link):
-                                st.components.v1.iframe(convertir_link_drive(programa_link), height=500)
+                            if st.session_state.get(f"viendo_pdf_cursada_{mid}") and convertir_link_preview(programa_link):
+                                st.components.v1.iframe(convertir_link_preview(programa_link), height=500)
 
                         # ── Sección de asistencia ─────────────────────────
                         mostrar_asistencia(usuario, mid, dias, anio, cuatri)
@@ -705,3 +696,4 @@ def mostrar(usuario):
                         guardar_tarea(usuario["id"], materia_tarea_id, nuevo_num, desc, fecha)
                         st.session_state[key_nueva] += 1
                         st.rerun()
+

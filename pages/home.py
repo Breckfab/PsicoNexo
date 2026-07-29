@@ -1,5 +1,5 @@
 import streamlit as st
-from db import get_conn, get_feriados, agregar_feriado, borrar_feriado
+from db import get_conn, get_feriados, agregar_feriado, borrar_feriado, get_clases_hoy
 from datetime import datetime, date, timedelta
 from utils import DIA_INDEX, contar_clases_en_rango, clasificar_asistencia
 
@@ -165,23 +165,6 @@ def get_home_data(usuario_id, carrera_id):
     return total, aprobadas, cursando, regulares, desaprobadas, avance, configs
 
 # ─── Queries secundarias ───────────────────────────────────────────────────────
-
-@st.cache_data(ttl=60)
-def get_clases_hoy(usuario_id):
-    hoy = datetime.now()
-    dia_semana = ["Lunes","Martes","Miércoles","Jueves","Viernes","Sábado","Domingo"][hoy.weekday()]
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute("""
-                SELECT m.nombre, c.horario, c.link, c.modalidad, c.turno
-                FROM cursadas c
-                JOIN materias m ON c.materia_id = m.id
-                JOIN alumno_materias am ON am.materia_id = m.id AND am.usuario_id = c.usuario_id
-                WHERE c.usuario_id = %s
-                AND am.estado = 'cursando'
-                AND c.dias ILIKE %s;
-            """, (usuario_id, f"%{dia_semana}%"))
-            return cur.fetchall()
 
 @st.cache_data(ttl=60)
 def get_tareas_pendientes(usuario_id):
@@ -717,3 +700,4 @@ def mostrar(usuario):
                 st.caption(f"{tdesc or 'Sin descripción'} — Vence: {venc_text}")
         else:
             st.info("No tenés tareas pendientes.")
+

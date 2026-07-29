@@ -1,5 +1,5 @@
 import streamlit as st
-from db import get_conn, get_feriados
+from db import get_conn, get_feriados, get_clases_hoy
 from datetime import datetime, date
 import re
 from utils import NOMBRES_ANIO, DIA_INDEX, contar_clases_en_rango, clasificar_asistencia, convertir_link_preview
@@ -121,23 +121,6 @@ def get_todas_cursadas(usuario_id):
         if mid not in result:
             result[mid] = row[1:]
     return result
-
-@st.cache_data(ttl=60)
-def get_clases_hoy(usuario_id):
-    hoy = datetime.now()
-    dia_semana = ["Lunes","Martes","Miércoles","Jueves","Viernes","Sábado","Domingo"][hoy.weekday()]
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute("""
-                SELECT m.nombre, c.horario, c.link, c.modalidad
-                FROM cursadas c
-                JOIN materias m ON c.materia_id = m.id
-                JOIN alumno_materias am ON am.materia_id = m.id AND am.usuario_id = c.usuario_id
-                WHERE c.usuario_id = %s
-                AND am.estado = 'cursando'
-                AND c.dias ILIKE %s;
-            """, (usuario_id, f"%{dia_semana}%"))
-            return cur.fetchall()
 
 @st.cache_data(ttl=60)
 def get_todos_programas_cursada(usuario_id):
@@ -479,7 +462,7 @@ def mostrar(usuario):
     clases_hoy = get_clases_hoy(usuario["id"])
     if clases_hoy:
         for clase in clases_hoy:
-            mnombre, horario, link, modalidad = clase
+            mnombre, horario, link, modalidad, turno = clase
             horario_text = f"a las {horario}" if horario else ""
             link_text = f" — [🔗 Acceder]({link})" if link else ""
             st.success(f"📚 Hoy tenés clase de **{mnombre}** {horario_text} ({modalidad}){link_text}")

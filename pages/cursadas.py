@@ -158,6 +158,41 @@ def get_tareas_materia(usuario_id, materia_id):
             """, (usuario_id, materia_id))
             return cur.fetchall()
 
+# ─── Materias aprobadas / promocionadas ─────────────────────────────────────
+# Se usan en la tab "✅ Materias aprobadas" (ítem de prioridad máxima,
+# 27/07/2026). Se separan en dos queries chicas en vez de un JOIN grande con
+# `cursadas` + `evaluaciones` para no arrastrar el problema de duplicación
+# de filas que aparece cuando una materia tiene más de una cursada o más de
+# una nota (el JOIN multiplicaría filas y el AVG saldría mal). En su lugar,
+# se resuelve cada pieza por separado y se combina en Python, reutilizando
+# get_todas_cursadas() (ya cacheada) para los datos de la cursada.
+
+@st.cache_data(ttl=60)
+def get_materias_aprobadas(usuario_id, carrera_id):
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT m.id, m.nombre, m.anio, am.estado
+                FROM materias m
+                JOIN alumno_materias am ON m.id = am.materia_id AND am.usuario_id = %s
+                WHERE m.carrera_id = %s
+                AND am.estado IN ('aprobada', 'promocionada')
+                ORDER BY m.anio, m.nombre;
+            """, (usuario_id, carrera_id))
+            return cur.fetchall()
+
+@st.cache_data(ttl=60)
+def get_promedios_por_materia(usuario_id):
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT materia_id, AVG(nota) as promedio
+                FROM evaluaciones
+                WHERE usuario_id = %s AND nota IS NOT NULL
+                GROUP BY materia_id;
+            """, (usuario_id,))
+            return {row[0]: row[1] for row in cur.fetchall()}
+
 def guardar_cursada(usuario_id, materia_id, anio, cuatrimestre, modalidad, turno, dias, horario, link,
                      profesor1, email_profesor1, profesor2, email_profesor2,
                      fecha_parcial1=None, fecha_parcial2=None, fecha_final=None):
@@ -453,7 +488,12 @@ def mostrar(usuario):
 
     st.markdown("---")
 
-    tab1, tab2, tab3 = st.tabs(["📋 Mis cursadas", "➕ Registrar cursada", "📌 Tareas"])
+    tab1, tab2, tab3, tab4 = st.tabs([
+        "📖 Cursando actualmente",
+        "➕ Registrar Nueva Materia",
+        "📌 Tareas",
+        "✅ Materias aprobadas",
+    ])
 
     with tab1:
         materias_cursando = get_materias_cursando(usuario["id"], usuario["carrera_id"])
@@ -753,3 +793,56 @@ def mostrar(usuario):
                         guardar_tarea(usuario["id"], materia_tarea_id, nuevo_num, desc, fecha)
                         st.session_state[key_nueva] += 1
                         st.rerun()
+
+    with tab4:
+        st.subheader("✅ Materias aprobadas")
+        st.caption("Materias con estado **aprobada** o **promocionada** que tienen una cursada registrada.")
+
+        aprobadas_raw = get_materias_aprobadas(usuario["id"], usuario["carrera_id"])
+        todas_cursadas_ap = get_todas_cursadas(usuario["id"])
+        promedios_map = get_promedios_por_materia(usuario["id"])
+
+        # Solo las que además tienen una cursada registrada (respuesta confirmada).
+        aprobadas = [a for a in aprobadas_raw if a[0] in todas_cursadas_ap]
+
+        if not aprobadas:
+            st.info("Todavía no tenés materias aprobadas o promocionadas con cursada registrada.")
+        else:
+            por_anio_ap = {}
+            for a in aprobadas:
+                mid, mnombre, manio, mestado = a
+                por_anio_ap.setdefault(manio, []).append(a)
+
+            for manio in sorted(por_anio_ap.keys()):
+                st.markdown(f"#### {NOMBRES_ANIO.get(manio, f'Año {manio}')}")
+
+                for mid, mnombre, manio_, mestado in por_anio_ap[manio]:
+                    cursada = todas_cursadas_ap[mid]
+                    (cid, anio_c, cuatri_c, modalidad, dias, horario, link, prof1, email_prof1, prof2,
+                     email_prof2, turno, fecha_parcial1, fecha_parcial2, fecha_final) = cursada
+
+                    profesores = prof1 or ""
+                    if prof2:
+                        profesores = f"{profesores} / {prof2}" if profesores else prof2
+
+                    promedio = promedios_map.get(mid)
+                    promedio_text = f"{float(promedio):.2f}" if promedio is not None else "Sin notas cargadas"
+
+                    profesor_html = f"<div style='color:#a8e6c1; font-size:13px; margin-top:2px;'>👨‍🏫 {profesores}</div>" if profesores else ""
+
+                    st.markdown(
+                        f"<div style='background-color:#123524; border-left:4px solid #2ecc71; "
+                        f"padding:12px 18px; border-radius:8px; margin-bottom:10px;'>"
+                        f"<span style='color:#2ecc71; font-weight:bold; font-size:16px;'>✅ {mnombre}</span>"
+                        f"<div style='color:#ccc; font-size:13px; margin-top:4px;'>"
+                        f"{cuatri_c} {anio_c} — {mestado.capitalize()}"
+                        f"</div>"
+                        f"{profesor_html}"
+                        f"<div style='color:#80ffaa; font-weight:bold; font-size:15px; margin-top:6px;'>"
+                        f"📊 Promedio: {promedio_text}</div>"
+                        f"</div>",
+                        unsafe_allow_html=True
+                    )
+
+            st.markdown("---")
+            st.caption(f"Total: {len(aprobadas)} materia(s) aprobada(s)/promocionada(s) con cursada registrada.")

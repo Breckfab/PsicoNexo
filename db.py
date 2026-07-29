@@ -230,6 +230,35 @@ def init_db():
         );
     """)
 
+    # Recomendaciones de profesores hechas "por terceros": a diferencia de
+    # opiniones_profesores (privada, un alumno opina de una materia que él
+    # mismo cursó), esta es información COMPARTIDA entre todos los alumnos
+    # de la carrera, sobre profesores de los que un alumno se enteró por un
+    # tercero (no la cursó él mismo). Un mismo profesor puede dictar hasta
+    # 5 materias distintas, por eso la relación con materias va en una tabla
+    # puente aparte en vez de columnas materia_id_1..5 (ítem "Profesores
+    # recomendados por terceros", agregado 29/07/2026).
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS recomendaciones_terceros (
+            id SERIAL PRIMARY KEY,
+            apellido TEXT NOT NULL,
+            nombre TEXT NOT NULL,
+            valoracion TEXT NOT NULL,
+            observaciones TEXT,
+            cargado_por INTEGER REFERENCES usuarios(id),
+            created_at TIMESTAMP DEFAULT NOW()
+        );
+    """)
+
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS recomendaciones_terceros_materias (
+            id SERIAL PRIMARY KEY,
+            recomendacion_id INTEGER REFERENCES recomendaciones_terceros(id) ON DELETE CASCADE,
+            materia_id INTEGER REFERENCES materias(id),
+            UNIQUE(recomendacion_id, materia_id)
+        );
+    """)
+
     cur.execute("""
         CREATE TABLE IF NOT EXISTS programas (
             id SERIAL PRIMARY KEY,

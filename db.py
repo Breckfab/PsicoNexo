@@ -5,6 +5,7 @@ import bcrypt
 from dotenv import load_dotenv
 import streamlit as st
 from contextlib import contextmanager
+from datetime import datetime
 
 load_dotenv()
 
@@ -340,3 +341,28 @@ def borrar_feriado(feriado_id):
             cur.execute("DELETE FROM feriados WHERE id = %s;", (feriado_id,))
         conn.commit()
     get_feriados.clear()
+
+# ─── Clases de hoy ──────────────────────────────────────────────────────────
+# Antes estaba duplicada, con SQL casi idéntico, en cursadas.py y home.py
+# (ítem de prioridad media, "Revisar duplicación de queries entre cursadas.py
+# y home.py", 27/07/2026). Se centraliza acá con la versión que incluye
+# `turno`, que es la más completa de las dos. Los llamadores que no necesiten
+# el turno simplemente ignoran ese valor al desempaquetar la tupla.
+
+@st.cache_data(ttl=60)
+def get_clases_hoy(usuario_id):
+    hoy = datetime.now()
+    dia_semana = ["Lunes","Martes","Miércoles","Jueves","Viernes","Sábado","Domingo"][hoy.weekday()]
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT m.nombre, c.horario, c.link, c.modalidad, c.turno
+                FROM cursadas c
+                JOIN materias m ON c.materia_id = m.id
+                JOIN alumno_materias am ON am.materia_id = m.id AND am.usuario_id = c.usuario_id
+                WHERE c.usuario_id = %s
+                AND am.estado = 'cursando'
+                AND c.dias ILIKE %s;
+            """, (usuario_id, f"%{dia_semana}%"))
+            return cur.fetchall()
+

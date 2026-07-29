@@ -55,6 +55,79 @@ def eliminar_opinion(opinion_id):
         conn.commit()
     get_opiniones.clear()
 
+# ─── Profesores recomendados por terceros ───────────────────────────────────
+# A diferencia de opiniones_profesores (privada, un alumno opina de una
+# materia que él mismo cursó), esta sección es COMPARTIDA entre todos los
+# alumnos de la carrera: sirve para cargar profesores de los que un alumno
+# se enteró por un tercero, sin haber cursado él mismo con ellos. Un mismo
+# profesor puede dictar hasta 5 materias, guardadas en la tabla puente
+# recomendaciones_terceros_materias. Solo quien cargó una recomendación
+# puede editarla o borrarla (agregado 29/07/2026).
+
+@st.cache_data(ttl=60)
+def get_recomendaciones_terceros(carrera_id):
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT rt.id, rt.apellido, rt.nombre, rt.valoracion, rt.observaciones,
+                       rt.cargado_por, u.nombre AS cargado_por_nombre,
+                       ARRAY_AGG(m.id ORDER BY m.anio, m.nombre) AS materia_ids,
+                       ARRAY_AGG(m.nombre ORDER BY m.anio, m.nombre) AS materia_nombres,
+                       ARRAY_AGG(m.anio ORDER BY m.anio, m.nombre) AS materia_anios
+                FROM recomendaciones_terceros rt
+                JOIN recomendaciones_terceros_materias rtm ON rtm.recomendacion_id = rt.id
+                JOIN materias m ON rtm.materia_id = m.id
+                LEFT JOIN usuarios u ON rt.cargado_por = u.id
+                WHERE m.carrera_id = %s
+                GROUP BY rt.id, rt.apellido, rt.nombre, rt.valoracion, rt.observaciones,
+                         rt.cargado_por, u.nombre
+                ORDER BY rt.apellido, rt.nombre;
+            """, (carrera_id,))
+            return cur.fetchall()
+
+def agregar_recomendacion_tercero(usuario_id, apellido, nombre, valoracion, observaciones, materia_ids):
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO recomendaciones_terceros (apellido, nombre, valoracion, observaciones, cargado_por)
+                VALUES (%s, %s, %s, %s, %s)
+                RETURNING id;
+            """, (apellido, nombre, valoracion, observaciones, usuario_id))
+            recomendacion_id = cur.fetchone()[0]
+            for materia_id in materia_ids:
+                cur.execute("""
+                    INSERT INTO recomendaciones_terceros_materias (recomendacion_id, materia_id)
+                    VALUES (%s, %s)
+                    ON CONFLICT (recomendacion_id, materia_id) DO NOTHING;
+                """, (recomendacion_id, materia_id))
+        conn.commit()
+    get_recomendaciones_terceros.clear()
+
+def actualizar_recomendacion_tercero(recomendacion_id, apellido, nombre, valoracion, observaciones, materia_ids):
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                UPDATE recomendaciones_terceros
+                SET apellido = %s, nombre = %s, valoracion = %s, observaciones = %s
+                WHERE id = %s;
+            """, (apellido, nombre, valoracion, observaciones, recomendacion_id))
+            cur.execute("DELETE FROM recomendaciones_terceros_materias WHERE recomendacion_id = %s;", (recomendacion_id,))
+            for materia_id in materia_ids:
+                cur.execute("""
+                    INSERT INTO recomendaciones_terceros_materias (recomendacion_id, materia_id)
+                    VALUES (%s, %s)
+                    ON CONFLICT (recomendacion_id, materia_id) DO NOTHING;
+                """, (recomendacion_id, materia_id))
+        conn.commit()
+    get_recomendaciones_terceros.clear()
+
+def eliminar_recomendacion_tercero(recomendacion_id):
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM recomendaciones_terceros WHERE id = %s;", (recomendacion_id,))
+        conn.commit()
+    get_recomendaciones_terceros.clear()
+
 def mostrar(usuario):
     if not usuario:
         st.switch_page("app.py")
@@ -63,7 +136,11 @@ def mostrar(usuario):
     st.title("⭐ Opiniones de Profesores")
     st.caption("Tus opiniones son privadas y solo las ves vos.")
 
-    tab1, tab2 = st.tabs(["📋 Mis opiniones", "➕ Agregar opinión"])
+    tab1, tab2, tab3 = st.tabs([
+        "📋 Mis opiniones",
+        "➕ Agregar opinión",
+        "🗣️ Profesores recomendados por terceros",
+    ])
 
     with tab1:
         opiniones = get_opiniones(usuario["id"])
@@ -178,3 +255,168 @@ def mostrar(usuario):
                 st.session_state.form_opinion_key += 1
                 st.success("✅ Opinión guardada.")
                 st.rerun()
+
+    with tab3:
+        st.caption(
+            "Recomendaciones **compartidas con todos los alumnos**, sobre profesores de los "
+            "que te enteraste por un tercero (no cursaste vos mismo/a con ellos)."
+        )
+
+        todas_mat = get_todas_materias(usuario["carrera_id"])
+        opciones_mat = {f"{NOMBRES_ANIO.get(m[2], '')} — {m[1]}": m[0] for m in todas_mat}
+        opciones_mat_lista = ["—"] + list(opciones_mat.keys())
+
+        if "form_terceros_key" not in st.session_state:
+            st.session_state.form_terceros_key = 0
+
+        with st.expander("➕ Cargar recomendación de un tercero"):
+            with st.form(f"form_terceros_{st.session_state.form_terceros_key}"):
+                col_ap, col_no = st.columns(2)
+                with col_ap:
+                    t_apellido = st.text_input("Apellido del profesor/a")
+                with col_no:
+                    t_nombre = st.text_input("Nombre del profesor/a")
+
+                t_valoracion = st.radio("Valoración", VALORACIONES, horizontal=True)
+
+                st.markdown("**Materias que dicta** _(hasta 5, completá al menos una)_")
+                t_materias_labels = []
+                for i in range(5):
+                    t_materias_labels.append(
+                        st.selectbox(f"Materia {i + 1}", opciones_mat_lista, index=0)
+                    )
+
+                t_observaciones = st.text_area("Observaciones (opcional)", height=100)
+                submit_terceros = st.form_submit_button("💾 Guardar recomendación", use_container_width=True)
+
+            if submit_terceros:
+                materia_ids_sel = [opciones_mat[lbl] for lbl in t_materias_labels if lbl != "—"]
+                if not t_apellido.strip() or not t_nombre.strip():
+                    st.error("Completá apellido y nombre del profesor/a.")
+                elif not materia_ids_sel:
+                    st.error("Seleccioná al menos una materia.")
+                else:
+                    agregar_recomendacion_tercero(
+                        usuario["id"], t_apellido.strip(), t_nombre.strip(),
+                        t_valoracion, t_observaciones.strip(), materia_ids_sel
+                    )
+                    st.session_state.form_terceros_key += 1
+                    st.success("✅ Recomendación guardada. Ya la pueden ver todos los alumnos.")
+                    st.rerun()
+
+        st.markdown("---")
+
+        recomendaciones = get_recomendaciones_terceros(usuario["carrera_id"])
+
+        if not recomendaciones:
+            st.info("Todavía no hay recomendaciones de terceros cargadas.")
+        else:
+            # Agrupar por profesor (apellido + nombre, sin importar mayúsculas/
+            # espacios) para que si dos alumnos distintos cargan al mismo
+            # profesor por separado, aparezca combinado en un solo bloque.
+            por_profesor_t = {}
+            for r in recomendaciones:
+                r_apellido, r_nombre = r[1], r[2]
+                clave = (r_apellido.strip().lower(), r_nombre.strip().lower())
+                if clave not in por_profesor_t:
+                    por_profesor_t[clave] = {"apellido": r_apellido, "nombre": r_nombre, "entradas": []}
+                por_profesor_t[clave]["entradas"].append(r)
+
+            for clave, grupo in por_profesor_t.items():
+                entradas = grupo["entradas"]
+                recomendados_t = sum(1 for e in entradas if e[3] == "Recomendado")
+                icono_prof_t = "👍" if recomendados_t >= len(entradas) / 2 else "👎"
+
+                materias_combinadas = set()
+                for e in entradas:
+                    for mn in e[8]:
+                        materias_combinadas.add(mn)
+
+                titulo_expander = f"{icono_prof_t} {grupo['apellido']}, {grupo['nombre']} — {', '.join(sorted(materias_combinadas))}"
+
+                with st.expander(titulo_expander):
+                    for e in entradas:
+                        (eid, e_apellido, e_nombre, e_val, e_obs, e_cargado_por,
+                         e_cargado_por_nombre, e_mat_ids, e_mat_nombres, e_mat_anios) = e
+
+                        key_edit_t = f"editando_terceros_{eid}"
+                        es_propia = usuario["id"] == e_cargado_por
+
+                        if es_propia and st.session_state.get(key_edit_t):
+                            # ── Formulario de edición inline (solo el dueño llega acá) ──
+                            with st.form(f"form_edit_terceros_{eid}"):
+                                ec_apellido = st.text_input("Apellido del profesor/a", value=e_apellido, key=f"e_ap_{eid}")
+                                ec_nombre = st.text_input("Nombre del profesor/a", value=e_nombre, key=f"e_no_{eid}")
+                                ec_valoracion = st.radio(
+                                    "Valoración", VALORACIONES,
+                                    index=VALORACIONES.index(e_val) if e_val in VALORACIONES else 0,
+                                    horizontal=True, key=f"e_val_{eid}"
+                                )
+
+                                st.markdown("**Materias que dicta** _(hasta 5)_")
+                                materia_ids_actuales = list(e_mat_ids)
+                                ec_materias_labels = []
+                                for i in range(5):
+                                    default_label = "—"
+                                    if i < len(materia_ids_actuales):
+                                        for lbl, mid_opt in opciones_mat.items():
+                                            if mid_opt == materia_ids_actuales[i]:
+                                                default_label = lbl
+                                                break
+                                    idx_default = opciones_mat_lista.index(default_label) if default_label in opciones_mat_lista else 0
+                                    ec_materias_labels.append(
+                                        st.selectbox(f"Materia {i + 1}", opciones_mat_lista, index=idx_default, key=f"e_mat_{i}_{eid}")
+                                    )
+
+                                ec_observaciones = st.text_area("Observaciones (opcional)", value=e_obs or "", height=100, key=f"e_obs_{eid}")
+
+                                col_ge, col_ce = st.columns(2)
+                                with col_ge:
+                                    guardar_t_edit = st.form_submit_button("💾 Guardar", use_container_width=True)
+                                with col_ce:
+                                    cancelar_t_edit = st.form_submit_button("❌ Cancelar", use_container_width=True)
+
+                            if guardar_t_edit:
+                                materia_ids_edit_sel = [opciones_mat[lbl] for lbl in ec_materias_labels if lbl != "—"]
+                                if not ec_apellido.strip() or not ec_nombre.strip():
+                                    st.error("Completá apellido y nombre del profesor/a.")
+                                elif not materia_ids_edit_sel:
+                                    st.error("Seleccioná al menos una materia.")
+                                else:
+                                    actualizar_recomendacion_tercero(
+                                        eid, ec_apellido.strip(), ec_nombre.strip(),
+                                        ec_valoracion, ec_observaciones.strip(), materia_ids_edit_sel
+                                    )
+                                    st.session_state[key_edit_t] = False
+                                    st.success("Recomendación actualizada.")
+                                    st.rerun()
+                            if cancelar_t_edit:
+                                st.session_state[key_edit_t] = False
+                                st.rerun()
+
+                        else:
+                            icono_val_t = "✅" if e_val == "Recomendado" else "❌"
+                            materias_texto = ", ".join(e_mat_nombres)
+
+                            if es_propia:
+                                col1, col2, col3 = st.columns([5, 1, 1])
+                                with col1:
+                                    st.markdown(f"{icono_val_t} **{e_val}** — {materias_texto}")
+                                    if e_obs:
+                                        st.caption(f"💬 {e_obs}")
+                                    st.caption("Cargado por: vos")
+                                with col2:
+                                    if st.button("✏️", key=f"edit_terceros_{eid}", use_container_width=True):
+                                        st.session_state[key_edit_t] = True
+                                        st.rerun()
+                                with col3:
+                                    if st.button("🗑️", key=f"del_terceros_{eid}", use_container_width=True):
+                                        eliminar_recomendacion_tercero(eid)
+                                        st.rerun()
+                            else:
+                                st.markdown(f"{icono_val_t} **{e_val}** — {materias_texto}")
+                                if e_obs:
+                                    st.caption(f"💬 {e_obs}")
+                                st.caption(f"Cargado por: {e_cargado_por_nombre or 'otro alumno'}")
+
+                        st.markdown("---")

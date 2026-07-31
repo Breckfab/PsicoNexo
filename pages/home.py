@@ -283,6 +283,79 @@ def mostrar_alertas_vencimiento(tareas):
                 icon="📅"
             )
 
+# ─── Alerta de asistencia ──────────────────────────────────────────────────────
+# Banner al tope de Home (mismo patrón que mostrar_alertas_vencimiento) que
+# lista TODAS las materias cursando con % de asistencia por debajo de 85%,
+# usando el mismo umbral que clasificar_asistencia() en el resto del sistema.
+# Se separa en dos niveles: 🚨 riesgo real de quedar libre (<75%) y
+# ⚠️ acercándose al límite (75%-85%), para que el alumno vea de un vistazo
+# cuántas faltas usó, cuántas tiene permitidas, y cuántas le quedan
+# disponibles antes de superar el 25% de inasistencias permitido.
+
+def mostrar_alerta_asistencia(materias_cursando, todas_configs, faltas_map, feriados_set):
+    if not materias_cursando:
+        return
+
+    en_riesgo = []
+    acercandose = []
+
+    for m in materias_cursando:
+        (mnombre, manio, mcuatri, manio_cursada, mprofesor,
+         mdias, mhorario, mmodalidad, mid, total_notas,
+         promedio, aprobadas_ev, desaprobadas_ev, detalle_notas) = m
+
+        config = todas_configs.get((manio_cursada, mcuatri))
+        if not config:
+            continue
+
+        fecha_ini, fecha_fin = config
+        clases_totales = contar_clases_en_rango(mdias, fecha_ini, fecha_fin, feriados_set)
+        if clases_totales == 0:
+            continue
+
+        faltas_mat = faltas_map.get(mid, 0)
+        porcentaje = round(((clases_totales - faltas_mat) / clases_totales) * 100, 1)
+        max_faltas = int(clases_totales * 0.25)
+        restantes = max(max_faltas - faltas_mat, 0)
+
+        if porcentaje >= 85:
+            continue
+
+        info = (mnombre, porcentaje, faltas_mat, max_faltas, restantes)
+        if porcentaje < 75:
+            en_riesgo.append(info)
+        else:
+            acercandose.append(info)
+
+    if not en_riesgo and not acercandose:
+        return
+
+    if en_riesgo:
+        with st.container():
+            msgs = []
+            for mnombre, porcentaje, faltas_mat, max_faltas, restantes in en_riesgo:
+                msgs.append(
+                    f"**{mnombre}** — {porcentaje}% de asistencia · {faltas_mat}/{max_faltas} faltas usadas · "
+                    f"podés faltar **{restantes}** clase(s) más"
+                )
+            st.error(
+                "🚨 **Riesgo de quedar libre por inasistencias:**\n\n" + "\n\n".join(f"• {m}" for m in msgs),
+                icon="🚨"
+            )
+
+    if acercandose:
+        with st.container():
+            msgs = []
+            for mnombre, porcentaje, faltas_mat, max_faltas, restantes in acercandose:
+                msgs.append(
+                    f"**{mnombre}** — {porcentaje}% de asistencia · {faltas_mat}/{max_faltas} faltas usadas · "
+                    f"podés faltar **{restantes}** clase(s) más"
+                )
+            st.warning(
+                "⚠️ **Te estás acercando al límite de faltas:**\n\n" + "\n\n".join(f"• {m}" for m in msgs),
+                icon="⚠️"
+            )
+
 # ─── Panel de configuración de fechas ─────────────────────────────────────────
 
 def mostrar_config_fechas(usuario_id, anio_actual, cuatrimestre_actual, todas_configs):
@@ -547,10 +620,6 @@ def mostrar(usuario):
     mes_actual = datetime.now().month
     anio_actual = datetime.now().year if mes_actual >= 3 else datetime.now().year - 1
 
-    # Tareas pendientes — se cargan primero para mostrar alertas arriba del todo
-    tareas = get_tareas_pendientes(usuario["id"])
-    mostrar_alertas_vencimiento(tareas)
-
     # Stats + configs en 1 roundtrip
     total, aprobadas, cursando, regulares, desaprobadas, avance, todas_configs = get_home_data(
         usuario["id"], usuario["carrera_id"]
@@ -562,6 +631,22 @@ def mostrar(usuario):
     cuatrimestre_para_query, header_cuatrimestre, en_transicion = determinar_estado_cuatrimestre(
         anio_actual, todas_configs
     )
+
+    # Se adelanta la carga de materias cursando + faltas + feriados (antes
+    # se cargaban más abajo, en la sección "Cursando") para poder calcular
+    # y mostrar el banner de alerta de asistencia arriba de todo, junto con
+    # el de tareas. Estos mismos datos se reutilizan después en el loop de
+    # materias, sin volver a pedirlos.
+    materias_cursando = get_materias_cursando_con_notas(
+        usuario["id"], anio_actual, cuatrimestre_para_query
+    )
+    faltas_map = get_faltas_por_materia(usuario["id"])
+    feriados_set = {f[1] for f in get_feriados(usuario["id"])}
+
+    # Tareas pendientes — se cargan primero para mostrar alertas arriba del todo
+    tareas = get_tareas_pendientes(usuario["id"])
+    mostrar_alertas_vencimiento(tareas)
+    mostrar_alerta_asistencia(materias_cursando, todas_configs, faltas_map, feriados_set)
 
     col1, col2, col3, col4, col5 = st.columns(5)
     with col1:
@@ -591,12 +676,6 @@ def mostrar(usuario):
         st.info(f"⏸️ **{header_cuatrimestre}**")
     else:
         st.markdown(f"### 📚 Cursando — {header_cuatrimestre}")
-
-    materias_cursando = get_materias_cursando_con_notas(
-        usuario["id"], anio_actual, cuatrimestre_para_query
-    )
-    faltas_map = get_faltas_por_materia(usuario["id"])
-    feriados_set = {f[1] for f in get_feriados(usuario["id"])}
 
     if not materias_cursando:
         st.info("No tenés materias registradas para este cuatrimestre.")
@@ -700,4 +779,3 @@ def mostrar(usuario):
                 st.caption(f"{tdesc or 'Sin descripción'} — Vence: {venc_text}")
         else:
             st.info("No tenés tareas pendientes.")
-

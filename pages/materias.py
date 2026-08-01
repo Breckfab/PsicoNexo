@@ -257,6 +257,34 @@ def mostrar(usuario):
         st.warning("No se encontraron materias para tu carrera.")
         return
 
+    # ── Sugerencias: materias habilitadas para cursar (ítem #5, 01/08/2026) ──
+    # Materias cuyas correlativas están TODAS en estado aprobada/promocionada,
+    # y que el alumno todavía no está cursando ni aprobó/promocionó. Reutiliza
+    # los datos ya calculados arriba (materias + correlatividades_map), sin
+    # agregar ninguna query nueva.
+    materias_habilitadas = []
+    for m in materias:
+        mid_h, codigo_h, nombre_h, anio_h, cuatri_h, final_oblig_h, es_electiva_h, estado_h = m
+        if estado_h in ("cursando", "aprobada", "promocionada"):
+            continue
+        correlativas_h = correlatividades_map.get(mid_h, [])
+        pendientes_h = [c for c, cestado in correlativas_h if cestado not in ("aprobada", "promocionada")]
+        if not pendientes_h:
+            materias_habilitadas.append((nombre_h, anio_h, estado_h))
+
+    if materias_habilitadas:
+        with st.expander(f"✨ Materias habilitadas para cursar ({len(materias_habilitadas)})", expanded=True):
+            st.caption("Ya cumplís todas las correlativas de estas materias. Podés marcarlas como 'cursando' cuando quieras, más abajo en el plan.")
+            por_anio_hab = {}
+            for nombre_h, anio_h, estado_h in materias_habilitadas:
+                por_anio_hab.setdefault(anio_h, []).append((nombre_h, estado_h))
+            for anio_h in sorted(por_anio_hab.keys()):
+                st.markdown(f"**{NOMBRES_ANIO.get(anio_h, f'Año {anio_h}')}**")
+                for nombre_h, estado_h in sorted(por_anio_hab[anio_h]):
+                    icono_h = COLORES.get(estado_h, "⬜")
+                    st.markdown(f"{icono_h} {nombre_h}")
+        st.markdown("---")
+
     tab1, tab2 = st.tabs(["📋 Plan de Estudios", "🗺️ Mapa de Correlativas"])
 
     # ── TAB 1: Plan de estudios (código original) ──────────────────────────────

@@ -306,8 +306,27 @@ def mostrar(usuario):
                         label_visibility="collapsed"
                     )
                     if nuevo_estado != estado:
-                        actualizar_estado(usuario["id"], mid, nuevo_estado)
-                        st.rerun()
+                        # ── Validación de correlativas (ítem #3, 31/07/2026) ──────
+                        # Antes de permitir el pase a "cursando", chequeamos que
+                        # todas las correlativas de esta materia estén en estado
+                        # aprobada o promocionada. Si falta alguna, se BLOQUEA el
+                        # cambio (no se llama a actualizar_estado) y se muestra
+                        # el detalle de qué le falta al alumno.
+                        correlativas_pendientes = []
+                        if nuevo_estado == "cursando":
+                            correlativas_pendientes = [
+                                cnombre for cnombre, cestado in correlatividades_map.get(mid, [])
+                                if cestado not in ("aprobada", "promocionada")
+                            ]
+
+                        if correlativas_pendientes:
+                            st.error(
+                                f"🔒 No podés marcar **{nombre}** como 'cursando' todavía. "
+                                f"Te falta aprobar/promocionar: {', '.join(correlativas_pendientes)}."
+                            )
+                        else:
+                            actualizar_estado(usuario["id"], mid, nuevo_estado)
+                            st.rerun()
 
                 with col3:
                     if programa:
@@ -442,4 +461,3 @@ def mostrar(usuario):
         col3.metric("📖 Cursando", cursando_c)
         col4.metric("⏳ Pendientes", pendientes_c)
         col5.metric("❌ Desaprobadas", desap_c)
-

@@ -179,6 +179,47 @@ def init_db():
         ALTER TABLE cursadas ADD COLUMN IF NOT EXISTS fecha_final DATE;
     """)
 
+    # ── Comisiones (ítem #6 de "Cosas por Hacer", 02/08/2026) ──────────────
+    # numero_comision + fecha_desde_comision viven directamente en cursadas y
+    # representan la comisión VIGENTE (ej. "COM V", desde tal fecha). No se
+    # puede estar en dos comisiones a la vez, pero sí cambiar de una a otra
+    # a mitad de cuatrimestre: cuando eso pasa, el período anterior se cierra
+    # y se archiva en comisiones_historial (ver más abajo), para que el
+    # cálculo de asistencia pueda sumar correctamente los días de cursada de
+    # cada tramo, aunque hayan sido distintos.
+    cur.execute("""
+        ALTER TABLE cursadas ADD COLUMN IF NOT EXISTS numero_comision TEXT;
+    """)
+    cur.execute("""
+        ALTER TABLE cursadas ADD COLUMN IF NOT EXISTS fecha_desde_comision DATE;
+    """)
+    cur.execute("""
+        UPDATE cursadas SET numero_comision = 'COM I' WHERE numero_comision IS NULL;
+    """)
+    cur.execute("""
+        UPDATE cursadas SET fecha_desde_comision = COALESCE(created_at::date, make_date(anio_cursada, 1, 1))
+        WHERE fecha_desde_comision IS NULL;
+    """)
+
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS comisiones_historial (
+            id SERIAL PRIMARY KEY,
+            cursada_id INTEGER REFERENCES cursadas(id) ON DELETE CASCADE,
+            numero_comision TEXT NOT NULL,
+            turno TEXT,
+            dias TEXT,
+            horario TEXT,
+            link TEXT,
+            profesor1 TEXT,
+            email_profesor1 TEXT,
+            profesor2 TEXT,
+            email_profesor2 TEXT,
+            fecha_desde DATE NOT NULL,
+            fecha_hasta DATE NOT NULL,
+            created_at TIMESTAMP DEFAULT NOW()
+        );
+    """)
+
     cur.execute("""
         CREATE TABLE IF NOT EXISTS evaluaciones (
             id SERIAL PRIMARY KEY,
@@ -395,3 +436,43 @@ def get_clases_hoy(usuario_id):
             """, (usuario_id, f"%{dia_semana}%"))
             return cur.fetchall()
 
+# ─── Comisiones (historial) ─────────────────────────────────────────────────
+# Centralizado acá porque lo usan tanto cursadas.py (formulario de cambio de
+# comisión y detalle de asistencia por materia) como home.py (cálculo de
+# asistencia multi-período en el dashboard) — mismo criterio que se usó para
+# get_clases_hoy (ítem #6 de "Cosas por Hacer", 02/08/2026).
+
+@st.cache_data(ttl=120)
+def get_historial_comisiones(cursada_id):
+    """
+    Períodos CERRADOS de comisión de una cursada (no incluye el vigente,
+    que vive en cursadas.numero_comision / cursadas.fecha_desde_comision).
+    Devuelve [(id, numero_comision, turno, dias, horario, link,
+    profesor1, email_profesor1, profesor2, email_profesor2,
+    fecha_desde, fecha_hasta), ...] ordenado por fecha_desde.
+    """
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT id, numero_comision, turno, dias, horario, link,
+                       profesor1, email_profesor1, profesor2, email_profesor2,
+                       fecha_desde, fecha_hasta
+                FROM comisiones_historial
+                WHERE cursada_id = %s
+                ORDER BY fecha_desde;
+            """, (cursada_id,))
+            return cur.fetchall()
+
+def get_periodos_comision(cursada_id, dias_actual, fecha_desde_actual):
+    """
+    Arma la lista completa de períodos de comisión de una cursada (los
+    cerrados + el vigente), para que utils.contar_clases_multi_periodo()
+    pueda sumar las clases dictadas de cada tramo por separado:
+    [(dias_str, fecha_desde, fecha_hasta_o_None), ...]
+    El último período (comisión vigente) usa fecha_hasta=None, que se
+    interpreta como "hasta el fin del cuatrimestre configurado".
+    """
+    historial = get_historial_comisiones(cursada_id)
+    periodos = [(h[3], h[10], h[11]) for h in historial]
+    periodos.append((dias_actual, fecha_desde_actual, None))
+    return periodos

@@ -1,7 +1,7 @@
 import streamlit as st
-from db import get_conn, get_feriados, agregar_feriado, borrar_feriado, get_clases_hoy
+from db import get_conn, get_feriados, agregar_feriado, borrar_feriado, get_clases_hoy, get_periodos_comision
 from datetime import datetime, date, timedelta
-from utils import DIA_INDEX, contar_clases_en_rango, clasificar_asistencia
+from utils import DIA_INDEX, contar_clases_en_rango, contar_clases_multi_periodo, clasificar_asistencia
 
 
 def determinar_estado_cuatrimestre(anio_actual, todas_configs):
@@ -188,7 +188,8 @@ def get_materias_cursando_con_notas(usuario_id, anio_actual, cuatrimestre_actual
                     SELECT
                         m.nombre, m.anio, c.cuatrimestre, c.anio_cursada,
                         c.profesor1, c.dias, c.horario, c.modalidad,
-                        m.id AS materia_id, am.usuario_id
+                        m.id AS materia_id, am.usuario_id,
+                        c.id AS cursada_id, c.numero_comision, c.fecha_desde_comision
                     FROM alumno_materias am
                     JOIN materias m  ON am.materia_id = m.id
                     JOIN cursadas c  ON c.materia_id = m.id AND c.usuario_id = am.usuario_id
@@ -221,7 +222,8 @@ def get_materias_cursando_con_notas(usuario_id, anio_actual, cuatrimestre_actual
                     ev.promedio,
                     COALESCE(ev.aprobadas, 0)    AS aprobadas,
                     COALESCE(ev.desaprobadas, 0) AS desaprobadas,
-                    ev.detalle_notas
+                    ev.detalle_notas,
+                    mc.cursada_id, mc.numero_comision, mc.fecha_desde_comision
                 FROM materias_cursando mc
                 LEFT JOIN evals_usuario ev ON ev.materia_id = mc.materia_id
                 ORDER BY mc.anio, mc.nombre;
@@ -291,6 +293,11 @@ def mostrar_alertas_vencimiento(tareas):
 # ⚠️ acercándose al límite (75%-85%), para que el alumno vea de un vistazo
 # cuántas faltas usó, cuántas tiene permitidas, y cuántas le quedan
 # disponibles antes de superar el 25% de inasistencias permitido.
+#
+# El cálculo suma clases por período de comisión (ítem #6, 02/08/2026): si
+# el alumno cambió de comisión a mitad de cuatrimestre, cada tramo cuenta
+# sus propios días de cursada dentro de sus propias fechas, en vez de
+# aplicar los días actuales a todo el rango.
 
 def mostrar_alerta_asistencia(materias_cursando, todas_configs, faltas_map, feriados_set):
     if not materias_cursando:
@@ -302,14 +309,19 @@ def mostrar_alerta_asistencia(materias_cursando, todas_configs, faltas_map, feri
     for m in materias_cursando:
         (mnombre, manio, mcuatri, manio_cursada, mprofesor,
          mdias, mhorario, mmodalidad, mid, total_notas,
-         promedio, aprobadas_ev, desaprobadas_ev, detalle_notas) = m
+         promedio, aprobadas_ev, desaprobadas_ev, detalle_notas,
+         cursada_id, numero_comision, fecha_desde_comision) = m
 
         config = todas_configs.get((manio_cursada, mcuatri))
         if not config:
             continue
 
         fecha_ini, fecha_fin = config
-        clases_totales = contar_clases_en_rango(mdias, fecha_ini, fecha_fin, feriados_set)
+        if cursada_id and fecha_desde_comision:
+            periodos = get_periodos_comision(cursada_id, mdias, fecha_desde_comision)
+            clases_totales = contar_clases_multi_periodo(periodos, fecha_ini, fecha_fin, feriados_set)
+        else:
+            clases_totales = contar_clases_en_rango(mdias, fecha_ini, fecha_fin, feriados_set)
         if clases_totales == 0:
             continue
 
@@ -565,7 +577,8 @@ def mostrar_barra_cuatrimestre(cuatrimestre, anio_cursada, todas_configs):
         unsafe_allow_html=True
     )
 
-def mostrar_chip_asistencia(mdias, manio_cursada, mcuatri, mid, todas_configs, faltas_map, feriados_set=None):
+def mostrar_chip_asistencia(mdias, manio_cursada, mcuatri, mid, todas_configs, faltas_map, feriados_set=None,
+                             cursada_id=None, fecha_desde_comision=None):
     config_asist = todas_configs.get((manio_cursada, mcuatri))
     if not config_asist:
         st.caption(
@@ -575,7 +588,11 @@ def mostrar_chip_asistencia(mdias, manio_cursada, mcuatri, mid, todas_configs, f
         return
 
     fecha_ini_a, fecha_fin_a = config_asist
-    clases_totales = contar_clases_en_rango(mdias, fecha_ini_a, fecha_fin_a, feriados_set)
+    if cursada_id and fecha_desde_comision:
+        periodos = get_periodos_comision(cursada_id, mdias, fecha_desde_comision)
+        clases_totales = contar_clases_multi_periodo(periodos, fecha_ini_a, fecha_fin_a, feriados_set)
+    else:
+        clases_totales = contar_clases_en_rango(mdias, fecha_ini_a, fecha_fin_a, feriados_set)
     if clases_totales == 0:
         st.caption(
             f"📅 No pude calcular la asistencia. Días cargados: **'{mdias or '—'}'** · "
@@ -683,7 +700,8 @@ def mostrar(usuario):
         for m in materias_cursando:
             (mnombre, manio, mcuatri, manio_cursada, mprofesor,
              mdias, mhorario, mmodalidad, mid, total_notas,
-             promedio, aprobadas_ev, desaprobadas_ev, detalle_notas) = m
+             promedio, aprobadas_ev, desaprobadas_ev, detalle_notas,
+             cursada_id, numero_comision, fecha_desde_comision) = m
 
             estado = calcular_estado_cursada(mcuatri)
             badge_color = "#2ecc71" if estado == "En curso" else "#95a5a6"
@@ -697,6 +715,8 @@ def mostrar(usuario):
                         dias_text = mdias or ""
                         horario_text = f"· {mhorario}" if mhorario else ""
                         st.caption(f"🗓️ {dias_text} {horario_text} — {mmodalidad or ''}")
+                    if numero_comision:
+                        st.caption(f"🔀 {numero_comision}")
                 with col_b:
                     st.markdown(
                         f"<div style='text-align:right;'>"
@@ -707,7 +727,10 @@ def mostrar(usuario):
                     )
 
                 mostrar_barra_cuatrimestre(mcuatri, manio_cursada, todas_configs)
-                mostrar_chip_asistencia(mdias, manio_cursada, mcuatri, mid, todas_configs, faltas_map, feriados_set)
+                mostrar_chip_asistencia(
+                    mdias, manio_cursada, mcuatri, mid, todas_configs, faltas_map, feriados_set,
+                    cursada_id, fecha_desde_comision
+                )
 
                 st.markdown("**Notas cargadas:**")
                 if total_notas and int(total_notas) > 0:

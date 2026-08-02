@@ -78,6 +78,32 @@ def contar_clases_en_rango(dias_str, fecha_inicio, fecha_fin, feriados=None):
     return total
 
 
+def contar_clases_multi_periodo(periodos, fecha_inicio_cuatri, fecha_fin_cuatri, feriados=None):
+    """
+    Suma las clases dictadas a lo largo de varios períodos de una misma
+    cursada (uno por cada comisión por la que pasó el alumno), recortando
+    cada período al rango real del cuatrimestre configurado.
+
+    `periodos` es una lista de tuplas (dias_str, fecha_desde, fecha_hasta),
+    donde fecha_hasta puede ser None para indicar "la comisión vigente"
+    (se recorta con fecha_fin_cuatri). Se usa para que un cambio de
+    comisión a mitad de cuatrimestre (ítem #6, 02/08/2026) no rompa el
+    cálculo de asistencia: cada tramo cuenta sus propios días de cursada
+    dentro de sus propias fechas, en vez de aplicar los días actuales a
+    todo el cuatrimestre.
+    """
+    if not fecha_inicio_cuatri or not fecha_fin_cuatri:
+        return 0
+    total = 0
+    for dias_str, p_desde, p_hasta in periodos:
+        desde = max(p_desde, fecha_inicio_cuatri) if p_desde else fecha_inicio_cuatri
+        hasta = min(p_hasta, fecha_fin_cuatri) if p_hasta else fecha_fin_cuatri
+        if hasta < desde:
+            continue
+        total += contar_clases_en_rango(dias_str, desde, hasta, feriados)
+    return total
+
+
 def clasificar_asistencia(porcentaje):
     """Devuelve (color, negrita) según qué tan cerca está el alumno del límite del 75%."""
     if porcentaje >= 85:

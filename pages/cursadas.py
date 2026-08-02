@@ -1,8 +1,8 @@
 import streamlit as st
-from db import get_conn, get_feriados, get_clases_hoy
-from datetime import datetime, date
+from db import get_conn, get_feriados, get_clases_hoy, get_historial_comisiones, get_periodos_comision
+from datetime import datetime, date, timedelta
 import re
-from utils import NOMBRES_ANIO, DIA_INDEX, contar_clases_en_rango, clasificar_asistencia, convertir_link_preview
+from utils import NOMBRES_ANIO, DIA_INDEX, contar_clases_en_rango, contar_clases_multi_periodo, clasificar_asistencia, convertir_link_preview
 
 MODALIDADES = ["Presencial", "Híbrida", "Asincrónica"]
 TURNOS = ["Mañana", "Tarde", "Noche"]
@@ -109,7 +109,8 @@ def get_todas_cursadas(usuario_id):
             cur.execute("""
                 SELECT materia_id, id, anio_cursada, cuatrimestre, modalidad, dias, horario, link,
                        profesor1, email_profesor1, profesor2, email_profesor2, turno,
-                       fecha_parcial1, fecha_parcial2, fecha_final
+                       fecha_parcial1, fecha_parcial2, fecha_final,
+                       numero_comision, fecha_desde_comision
                 FROM cursadas
                 WHERE usuario_id = %s
                 ORDER BY anio_cursada DESC, id DESC;
@@ -178,12 +179,22 @@ def get_promedios_por_materia(usuario_id):
 
 def guardar_cursada(usuario_id, materia_id, anio, cuatrimestre, modalidad, turno, dias, horario, link,
                      profesor1, email_profesor1, profesor2, email_profesor2,
-                     fecha_parcial1=None, fecha_parcial2=None, fecha_final=None):
+                     fecha_parcial1=None, fecha_parcial2=None, fecha_final=None,
+                     numero_comision=None):
+    """
+    Alta / corrección de una cursada. IMPORTANTE: esto es para cargar datos
+    o corregir errores de tipeo — NO historiza cambios de comisión. Si el
+    alumno cambió de comisión (ej. de "COM III" a "COM V") a mitad de
+    cuatrimestre, hay que usar cambiar_comision(), que sí archiva el
+    período anterior en comisiones_historial. Por eso el ON CONFLICT de acá
+    deliberadamente no toca numero_comision ni fecha_desde_comision: esos
+    campos solo se fijan al crear la cursada por primera vez.
+    """
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute("""
-                INSERT INTO cursadas (usuario_id, materia_id, anio_cursada, cuatrimestre, modalidad, turno, dias, horario, link, profesor1, email_profesor1, profesor2, email_profesor2, fecha_parcial1, fecha_parcial2, fecha_final)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                INSERT INTO cursadas (usuario_id, materia_id, anio_cursada, cuatrimestre, modalidad, turno, dias, horario, link, profesor1, email_profesor1, profesor2, email_profesor2, fecha_parcial1, fecha_parcial2, fecha_final, numero_comision, fecha_desde_comision)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, CURRENT_DATE)
                 ON CONFLICT (usuario_id, materia_id, anio_cursada, cuatrimestre)
                 DO UPDATE SET modalidad = EXCLUDED.modalidad, turno = EXCLUDED.turno,
                               dias = EXCLUDED.dias, horario = EXCLUDED.horario,
@@ -196,10 +207,67 @@ def guardar_cursada(usuario_id, materia_id, anio, cuatrimestre, modalidad, turno
                               fecha_final = EXCLUDED.fecha_final;
             """, (usuario_id, materia_id, anio, cuatrimestre, modalidad, turno, dias, horario, link,
                   profesor1, email_profesor1, profesor2, email_profesor2,
-                  fecha_parcial1, fecha_parcial2, fecha_final))
+                  fecha_parcial1, fecha_parcial2, fecha_final,
+                  numero_comision or "COM I"))
         conn.commit()
     get_todas_cursadas.clear()
     get_clases_hoy.clear()
+
+def cambiar_comision(usuario_id, materia_id, fecha_cambio, nuevo_numero, nuevo_turno, nuevos_dias,
+                      nuevo_horario, nuevo_link, nuevo_prof1, nuevo_email_prof1, nuevo_prof2, nuevo_email_prof2):
+    """
+    Registra un cambio de comisión a mitad de cursada (ítem #6, 02/08/2026):
+    no se puede estar en dos comisiones a la vez, pero sí cambiar de una a
+    otra durante el cuatrimestre. Cierra el período de la comisión vigente
+    en comisiones_historial (con los datos que tenía hasta ahora) y
+    actualiza la cursada con los datos de la nueva comisión a partir de
+    `fecha_cambio`, para que el cálculo de asistencia pueda sumar
+    correctamente las clases dictadas de cada tramo.
+    """
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT id, numero_comision, turno, dias, horario, link,
+                       profesor1, email_profesor1, profesor2, email_profesor2, fecha_desde_comision
+                FROM cursadas
+                WHERE usuario_id = %s AND materia_id = %s;
+            """, (usuario_id, materia_id))
+            row = cur.fetchone()
+            if not row:
+                return False, "No se encontró la cursada de esta materia."
+
+            (cursada_id, numero_actual, turno_actual, dias_actual, horario_actual, link_actual,
+             prof1_actual, email1_actual, prof2_actual, email2_actual, fecha_desde_actual) = row
+
+            if fecha_desde_actual and fecha_cambio <= fecha_desde_actual:
+                return False, "La fecha de cambio debe ser posterior a la fecha de inicio de la comisión actual."
+
+            if fecha_desde_actual:
+                fecha_hasta_cierre = fecha_cambio - timedelta(days=1)
+                cur.execute("""
+                    INSERT INTO comisiones_historial
+                    (cursada_id, numero_comision, turno, dias, horario, link,
+                     profesor1, email_profesor1, profesor2, email_profesor2,
+                     fecha_desde, fecha_hasta)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s);
+                """, (cursada_id, numero_actual or "COM I", turno_actual, dias_actual, horario_actual, link_actual,
+                      prof1_actual, email1_actual, prof2_actual, email2_actual,
+                      fecha_desde_actual, fecha_hasta_cierre))
+
+            cur.execute("""
+                UPDATE cursadas
+                SET numero_comision = %s, turno = %s, dias = %s, horario = %s, link = %s,
+                    profesor1 = %s, email_profesor1 = %s, profesor2 = %s, email_profesor2 = %s,
+                    fecha_desde_comision = %s
+                WHERE id = %s;
+            """, (nuevo_numero, nuevo_turno, nuevos_dias, nuevo_horario, nuevo_link,
+                  nuevo_prof1, nuevo_email_prof1, nuevo_prof2, nuevo_email_prof2,
+                  fecha_cambio, cursada_id))
+        conn.commit()
+    get_todas_cursadas.clear()
+    get_clases_hoy.clear()
+    get_historial_comisiones.clear()
+    return True, f"Comisión actualizada a {nuevo_numero}."
 
 def borrar_cursada(usuario_id, materia_id):
     with get_conn() as conn:
@@ -310,12 +378,22 @@ def actualizar_falta(falta_id, fecha, justificada):
         conn.commit()
     get_faltas_materia.clear()
 
-def calcular_asistencia(usuario_id, materia_id, dias_str, anio_cursada, cuatrimestre, feriados=None):
+def calcular_asistencia(usuario_id, materia_id, dias_str, anio_cursada, cuatrimestre, feriados=None,
+                         cursada_id=None, fecha_desde_comision=None):
     config = get_config_cuatrimestre_materia(usuario_id, anio_cursada, cuatrimestre)
     if not config:
         return None
     fecha_inicio, fecha_fin = config
-    clases_totales = contar_clases_en_rango(dias_str, fecha_inicio, fecha_fin, feriados)
+
+    # Si tenemos la cursada y la fecha de inicio de la comisión vigente,
+    # sumamos clases por tramo (uno por cada comisión por la que pasó el
+    # alumno), en vez de aplicar los días actuales a todo el cuatrimestre.
+    if cursada_id and fecha_desde_comision:
+        periodos = get_periodos_comision(cursada_id, dias_str, fecha_desde_comision)
+        clases_totales = contar_clases_multi_periodo(periodos, fecha_inicio, fecha_fin, feriados)
+    else:
+        clases_totales = contar_clases_en_rango(dias_str, fecha_inicio, fecha_fin, feriados)
+
     if clases_totales == 0:
         return None
     faltas = get_faltas_materia(usuario_id, materia_id)
@@ -332,7 +410,7 @@ def calcular_asistencia(usuario_id, materia_id, dias_str, anio_cursada, cuatrime
         "detalle_faltas": faltas,
     }
 
-def mostrar_asistencia(usuario, mid, dias, anio, cuatri):
+def mostrar_asistencia(usuario, mid, dias, anio, cuatri, cursada_id=None, fecha_desde_comision=None):
     st.markdown("---")
     st.markdown("#### 📅 Asistencia")
 
@@ -348,7 +426,13 @@ def mostrar_asistencia(usuario, mid, dias, anio, cuatri):
     feriados_set = {f[1] for f in get_feriados(usuario["id"])}
 
     fecha_inicio, fecha_fin = config
-    clases_totales = contar_clases_en_rango(dias, fecha_inicio, fecha_fin, feriados_set)
+
+    if cursada_id and fecha_desde_comision:
+        periodos = get_periodos_comision(cursada_id, dias, fecha_desde_comision)
+        clases_totales = contar_clases_multi_periodo(periodos, fecha_inicio, fecha_fin, feriados_set)
+    else:
+        clases_totales = contar_clases_en_rango(dias, fecha_inicio, fecha_fin, feriados_set)
+
     if clases_totales == 0:
         st.caption(
             f"📅 No pude calcular clases. Días cargados: **'{dias or '—'}'** · "
@@ -357,7 +441,7 @@ def mostrar_asistencia(usuario, mid, dias, anio, cuatri):
         )
         return
 
-    stats = calcular_asistencia(usuario["id"], mid, dias, anio, cuatri, feriados_set)
+    stats = calcular_asistencia(usuario["id"], mid, dias, anio, cuatri, feriados_set, cursada_id, fecha_desde_comision)
     porcentaje = stats["porcentaje"]
     color, negrita = clasificar_asistencia(porcentaje)
     peso = "bold" if negrita else "normal"
@@ -452,6 +536,83 @@ def mostrar_asistencia(usuario, mid, dias, anio, cuatri):
         else:
             st.caption("No hay faltas registradas todavía. Por defecto se asume presente en todas las clases.")
 
+def mostrar_gestion_comision(usuario, mid, cid, numero_comision, fecha_desde_comision, turno, dias, horario, link,
+                              prof1, email_prof1, prof2, email_prof2):
+    """
+    Panel de comisión actual + formulario de cambio de comisión + historial
+    de comisiones anteriores (ítem #6 de "Cosas por Hacer", 02/08/2026).
+    """
+    st.markdown("---")
+    col_com1, col_com2 = st.columns([3, 1])
+    with col_com1:
+        comision_texto = numero_comision or "—"
+        if fecha_desde_comision:
+            comision_texto += f" (desde {fecha_desde_comision.strftime('%d/%m/%Y')})"
+        st.caption(f"🔀 Comisión actual: **{comision_texto}**")
+    with col_com2:
+        if st.button("🔄 Cambiar", key=f"btn_cambiar_com_{mid}", use_container_width=True):
+            st.session_state[f"cambiando_comision_{mid}"] = not st.session_state.get(f"cambiando_comision_{mid}", False)
+            st.rerun()
+
+    if st.session_state.get(f"cambiando_comision_{mid}"):
+        with st.form(f"form_cambiar_comision_{mid}"):
+            st.markdown("**🔄 Registrar cambio de comisión**")
+            col_cc1, col_cc2 = st.columns(2)
+            with col_cc1:
+                cc_fecha = st.date_input("Fecha del cambio", value=date.today(), key=f"cc_fecha_{mid}")
+                cc_numero = st.text_input("Nueva comisión (ej: COM V)", key=f"cc_numero_{mid}")
+                cc_turno = st.selectbox("Turno", TURNOS, index=TURNOS.index(turno) if turno in TURNOS else 0, key=f"cc_turno_{mid}")
+            with col_cc2:
+                cc_horario = st.text_input("Nuevo horario", key=f"cc_horario_{mid}")
+                cc_link = st.text_input("Nuevo link", value=link or "", key=f"cc_link_{mid}")
+            cc_dias = st.multiselect("Nuevos días", DIAS, key=f"cc_dias_{mid}")
+            col_cc3, col_cc4 = st.columns(2)
+            with col_cc3:
+                cc_prof1 = st.text_input("Profesor/a 1", value=prof1 or "", key=f"cc_prof1_{mid}")
+                cc_email1 = st.text_input("Email Profesor/a 1", value=email_prof1 or "", key=f"cc_email1_{mid}")
+            with col_cc4:
+                cc_prof2 = st.text_input("Profesor/a 2", value=prof2 or "", key=f"cc_prof2_{mid}")
+                cc_email2 = st.text_input("Email Profesor/a 2", value=email_prof2 or "", key=f"cc_email2_{mid}")
+            col_cg, col_cx = st.columns(2)
+            with col_cg:
+                guardar_cc = st.form_submit_button("💾 Guardar cambio", use_container_width=True)
+            with col_cx:
+                cancelar_cc = st.form_submit_button("❌ Cancelar", use_container_width=True)
+
+        if guardar_cc:
+            if not cc_numero.strip():
+                st.error("Ingresá el número de comisión.")
+            else:
+                cc_horario_norm = normalizar_horario(cc_horario)
+                if cc_horario_norm is None:
+                    st.error("⏰ Formato de horario no reconocido. Usá HH:MM, ej: 18:30")
+                else:
+                    ok_cc, msg_cc = cambiar_comision(
+                        usuario["id"], mid, cc_fecha, cc_numero.strip(), cc_turno,
+                        ", ".join(cc_dias), cc_horario_norm, cc_link,
+                        cc_prof1, cc_email1, cc_prof2, cc_email2
+                    )
+                    if ok_cc:
+                        st.session_state[f"cambiando_comision_{mid}"] = False
+                        st.success(msg_cc)
+                        st.rerun()
+                    else:
+                        st.error(msg_cc)
+        if cancelar_cc:
+            st.session_state[f"cambiando_comision_{mid}"] = False
+            st.rerun()
+
+    historial_com = get_historial_comisiones(cid)
+    if historial_com:
+        with st.expander(f"📜 Historial de comisiones ({len(historial_com)})"):
+            for hc in historial_com:
+                (hid, hnum, hturno, hdias, hhorario, hlink, hprof1, hemail1,
+                 hprof2, hemail2, hdesde, hhasta) = hc
+                st.caption(
+                    f"**{hnum}** — {hdesde.strftime('%d/%m/%Y')} → {hhasta.strftime('%d/%m/%Y')} · "
+                    f"{hturno or '—'} · {hdias or '—'} {hhorario or ''}"
+                )
+
 def mostrar(usuario):
     if not usuario:
         st.switch_page("app.py")
@@ -494,7 +655,8 @@ def mostrar(usuario):
                 with st.expander(f"{NOMBRES_ANIO.get(manio, '')} — {mnombre}"):
                     if cursada:
                         (cid, anio, cuatri, modalidad, dias, horario, link, prof1, email_prof1, prof2,
-                         email_prof2, turno, fecha_parcial1, fecha_parcial2, fecha_final) = cursada
+                         email_prof2, turno, fecha_parcial1, fecha_parcial2, fecha_final,
+                         numero_comision, fecha_desde_comision) = cursada
                         col1, col2 = st.columns(2)
                         with col1:
                             st.markdown(f"**Año:** {anio}")
@@ -540,7 +702,13 @@ def mostrar(usuario):
                                 st.components.v1.iframe(convertir_link_preview(programa_link), height=500)
 
                         # ── Sección de asistencia ─────────────────────────
-                        mostrar_asistencia(usuario, mid, dias, anio, cuatri)
+                        mostrar_asistencia(usuario, mid, dias, anio, cuatri, cid, fecha_desde_comision)
+
+                        # ── Comisión: panel + cambio + historial ──────────
+                        mostrar_gestion_comision(
+                            usuario, mid, cid, numero_comision, fecha_desde_comision, turno, dias, horario, link,
+                            prof1, email_prof1, prof2, email_prof2
+                        )
 
                         st.markdown("---")
                         col_edit, col_borrar = st.columns(2)
@@ -614,7 +782,8 @@ def mostrar(usuario):
                                         usuario["id"], mid, e_anio, e_cuatri, e_modalidad, e_turno,
                                         ", ".join(e_dias), e_horario_norm, e_link, e_prof1, e_email_prof1,
                                         e_prof2, e_email_prof2,
-                                        e_fecha_parcial1, e_fecha_parcial2, e_fecha_final
+                                        e_fecha_parcial1, e_fecha_parcial2, e_fecha_final,
+                                        numero_comision=numero_comision
                                     )
                                     st.session_state[f"editando_cursada_{mid}"] = False
                                     st.success("Cursada actualizada.")
@@ -653,7 +822,11 @@ def mostrar(usuario):
                 modalidad = st.selectbox("Modalidad", MODALIDADES)
                 horario = st.text_input("Horario (ej: 18:30)")
                 link = st.text_input("Link de clase online")
-            dias_sel = st.multiselect("Días de cursada", DIAS)
+            col3, col4 = st.columns(2)
+            with col3:
+                dias_sel = st.multiselect("Días de cursada", DIAS)
+            with col4:
+                comision = st.text_input("Comisión (ej: COM V)", value="COM I")
             col1, col2 = st.columns(2)
             with col1:
                 profesor1 = st.text_input("Profesor/a 1")
@@ -686,7 +859,8 @@ def mostrar(usuario):
                     guardar_cursada(
                         usuario["id"], materia_id, anio, cuatrimestre, modalidad, turno, dias_str, horario_norm, link,
                         profesor1, email_profesor1, profesor2, email_profesor2,
-                        fecha_parcial1, fecha_parcial2, fecha_final
+                        fecha_parcial1, fecha_parcial2, fecha_final,
+                        numero_comision=comision.strip() or "COM I"
                     )
                     st.session_state.form_cursada_key += 1
                     st.success("✅ Cursada guardada correctamente.")
@@ -802,7 +976,8 @@ def mostrar(usuario):
                 for mid, mnombre, manio_, mestado in por_anio_ap[manio]:
                     cursada = todas_cursadas_ap[mid]
                     (cid, anio_c, cuatri_c, modalidad, dias, horario, link, prof1, email_prof1, prof2,
-                     email_prof2, turno, fecha_parcial1, fecha_parcial2, fecha_final) = cursada
+                     email_prof2, turno, fecha_parcial1, fecha_parcial2, fecha_final,
+                     numero_comision_ap, fecha_desde_comision_ap) = cursada
 
                     profesores = prof1 or ""
                     if prof2:

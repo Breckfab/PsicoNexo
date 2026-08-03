@@ -481,15 +481,24 @@ def mostrar_asistencia(usuario, mid, dias, anio, cuatri, cursada_id=None, fecha_
         )
 
     with st.expander("📋 Marcar falta / ver faltas registradas"):
-        with st.form(f"form_falta_{mid}"):
+        # Contador de reseteo (ítem "formularios deben volver limpios",
+        # 02/08/2026): se incrementa después de guardar para que el form se
+        # recree con keys nuevas y no quede con la fecha/checkbox tildados.
+        falta_key = f"falta_form_key_{mid}"
+        if falta_key not in st.session_state:
+            st.session_state[falta_key] = 0
+        fk = st.session_state[falta_key]
+
+        with st.form(f"form_falta_{mid}_{fk}"):
             col_f1, col_f2 = st.columns(2)
             with col_f1:
-                fecha_falta = st.date_input("Fecha de la falta", value=date.today(), key=f"fecha_falta_{mid}")
+                fecha_falta = st.date_input("Fecha de la falta", value=date.today(), key=f"fecha_falta_{mid}_{fk}")
             with col_f2:
-                justificada = st.checkbox("¿Justificada?", key=f"just_falta_{mid}")
+                justificada = st.checkbox("¿Justificada?", key=f"just_falta_{mid}_{fk}")
             agregar = st.form_submit_button("➕ Marcar falta", use_container_width=True)
         if agregar:
             agregar_falta(usuario["id"], mid, fecha_falta, justificada)
+            st.session_state[falta_key] += 1
             st.success("Falta registrada.")
             st.rerun()
 
@@ -555,24 +564,33 @@ def mostrar_gestion_comision(usuario, mid, cid, numero_comision, fecha_desde_com
             st.rerun()
 
     if st.session_state.get(f"cambiando_comision_{mid}"):
-        with st.form(f"form_cambiar_comision_{mid}"):
+        # Contador de reseteo (ítem "formularios deben volver limpios",
+        # 02/08/2026): se incrementa al guardar y al cancelar, para que el
+        # form vuelva limpio la próxima vez que se abra, en vez de quedar
+        # con los datos de un intento anterior.
+        cc_key = f"cambiar_comision_form_key_{mid}"
+        if cc_key not in st.session_state:
+            st.session_state[cc_key] = 0
+        fk = st.session_state[cc_key]
+
+        with st.form(f"form_cambiar_comision_{mid}_{fk}"):
             st.markdown("**🔄 Registrar cambio de comisión**")
             col_cc1, col_cc2 = st.columns(2)
             with col_cc1:
-                cc_fecha = st.date_input("Fecha del cambio", value=date.today(), key=f"cc_fecha_{mid}")
-                cc_numero = st.text_input("Nueva comisión (ej: COM V)", key=f"cc_numero_{mid}")
-                cc_turno = st.selectbox("Turno", TURNOS, index=TURNOS.index(turno) if turno in TURNOS else 0, key=f"cc_turno_{mid}")
+                cc_fecha = st.date_input("Fecha del cambio", value=date.today(), key=f"cc_fecha_{mid}_{fk}")
+                cc_numero = st.text_input("Nueva comisión (ej: COM V)", key=f"cc_numero_{mid}_{fk}")
+                cc_turno = st.selectbox("Turno", TURNOS, index=TURNOS.index(turno) if turno in TURNOS else 0, key=f"cc_turno_{mid}_{fk}")
             with col_cc2:
-                cc_horario = st.text_input("Nuevo horario", key=f"cc_horario_{mid}")
-                cc_link = st.text_input("Nuevo link", value=link or "", key=f"cc_link_{mid}")
-            cc_dias = st.multiselect("Nuevos días", DIAS, key=f"cc_dias_{mid}")
+                cc_horario = st.text_input("Nuevo horario", key=f"cc_horario_{mid}_{fk}")
+                cc_link = st.text_input("Nuevo link", value=link or "", key=f"cc_link_{mid}_{fk}")
+            cc_dias = st.multiselect("Nuevos días", DIAS, key=f"cc_dias_{mid}_{fk}")
             col_cc3, col_cc4 = st.columns(2)
             with col_cc3:
-                cc_prof1 = st.text_input("Profesor/a 1", value=prof1 or "", key=f"cc_prof1_{mid}")
-                cc_email1 = st.text_input("Email Profesor/a 1", value=email_prof1 or "", key=f"cc_email1_{mid}")
+                cc_prof1 = st.text_input("Profesor/a 1", value=prof1 or "", key=f"cc_prof1_{mid}_{fk}")
+                cc_email1 = st.text_input("Email Profesor/a 1", value=email_prof1 or "", key=f"cc_email1_{mid}_{fk}")
             with col_cc4:
-                cc_prof2 = st.text_input("Profesor/a 2", value=prof2 or "", key=f"cc_prof2_{mid}")
-                cc_email2 = st.text_input("Email Profesor/a 2", value=email_prof2 or "", key=f"cc_email2_{mid}")
+                cc_prof2 = st.text_input("Profesor/a 2", value=prof2 or "", key=f"cc_prof2_{mid}_{fk}")
+                cc_email2 = st.text_input("Email Profesor/a 2", value=email_prof2 or "", key=f"cc_email2_{mid}_{fk}")
             col_cg, col_cx = st.columns(2)
             with col_cg:
                 guardar_cc = st.form_submit_button("💾 Guardar cambio", use_container_width=True)
@@ -594,12 +612,14 @@ def mostrar_gestion_comision(usuario, mid, cid, numero_comision, fecha_desde_com
                     )
                     if ok_cc:
                         st.session_state[f"cambiando_comision_{mid}"] = False
+                        st.session_state[cc_key] += 1
                         st.success(msg_cc)
                         st.rerun()
                     else:
                         st.error(msg_cc)
         if cancelar_cc:
             st.session_state[f"cambiando_comision_{mid}"] = False
+            st.session_state[cc_key] += 1
             st.rerun()
 
     historial_com = get_historial_comisiones(cid)

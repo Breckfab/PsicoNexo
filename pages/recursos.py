@@ -2,7 +2,7 @@ import streamlit as st
 from db import get_conn
 from utils import NOMBRES_ANIO, convertir_link_preview
 
-TIPOS = ["Bibliografía", "Apunte", "NotebookLM", "Otro"]
+TIPOS = ["Bibliografía", "Apunte", "NotebookLM", "Programa de la Materia", "Otro"]
 
 @st.cache_data(ttl=60)
 def get_materias_alumno(carrera_id):
@@ -112,7 +112,7 @@ def mostrar(usuario):
 
             if rtipo != tipo_actual:
                 tipo_actual = rtipo
-                iconos = {"Bibliografía": "📚", "Apunte": "📝", "NotebookLM": "🤖", "Otro": "🔗"}
+                iconos = {"Bibliografía": "📚", "Apunte": "📝", "NotebookLM": "🤖", "Programa de la Materia": "📋", "Otro": "🔗"}
                 st.markdown(f"### {iconos.get(rtipo, '🔗')} {rtipo}")
 
             key_edit_rec = f"editando_recurso_{rid}"

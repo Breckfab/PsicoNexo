@@ -192,13 +192,31 @@ def mostrar(usuario):
                 st.info(f"No hay {tipo.lower()}s cargados.")
 
             with st.expander(f"➕ Agregar {tipo}"):
-                with st.form(f"form_{tipo.replace(' ', '_')}_{materia_id}"):
-                    descripcion = st.text_input("Descripción (ej: Parcial 1, TP N°2)")
-                    nota = st.number_input("Nota", min_value=0.0, max_value=10.0, step=0.01, format="%.2f", value=0.0)
-                    fecha = st.date_input("Fecha", value=date.today())
-                    aprobado = st.checkbox("¿Aprobado? (marcá si la nota es ≥ 6)", value=False)
+                # Contador de reseteo (ítem "formularios deben volver
+                # limpios", 02/08/2026): se incrementa después de guardar
+                # para que el form se recree con keys nuevas y no quede con
+                # la descripción/nota recién tipeadas en pantalla.
+                eval_key = f"eval_form_key_{tipo}_{materia_id}"
+                if eval_key not in st.session_state:
+                    st.session_state[eval_key] = 0
+                fk = st.session_state[eval_key]
+
+                with st.form(f"form_{tipo.replace(' ', '_')}_{materia_id}_{fk}"):
+                    descripcion = st.text_input(
+                        "Descripción (ej: Parcial 1, TP N°2)", key=f"eval_desc_{tipo}_{materia_id}_{fk}"
+                    )
+                    nota = st.number_input(
+                        "Nota", min_value=0.0, max_value=10.0, step=0.01, format="%.2f", value=0.0,
+                        key=f"eval_nota_{tipo}_{materia_id}_{fk}"
+                    )
+                    fecha = st.date_input("Fecha", value=date.today(), key=f"eval_fecha_{tipo}_{materia_id}_{fk}")
+                    aprobado = st.checkbox(
+                        "¿Aprobado? (marcá si la nota es ≥ 6)", value=False,
+                        key=f"eval_aprobado_{tipo}_{materia_id}_{fk}"
+                    )
                     submit = st.form_submit_button("💾 Guardar", use_container_width=True)
                 if submit:
                     agregar_evaluacion(usuario["id"], materia_id, tipo, descripcion, nota, fecha, aprobado)
+                    st.session_state[eval_key] += 1
                     st.success(f"{tipo} guardado.")
                     st.rerun()

@@ -80,16 +80,24 @@ def mostrar(usuario):
     st.markdown("---")
 
     with st.expander("➕ Agregar nuevo recurso"):
-        with st.form("form_recurso"):
-            nombre = st.text_input("Nombre del recurso")
-            tipo = st.selectbox("Tipo", TIPOS)
-            link = st.text_input("Link (Google Drive, Dropbox, NotebookLM, etc.)")
+        # Contador de reseteo (ítem "formularios deben volver limpios",
+        # 02/08/2026): se incrementa después de guardar para que el form se
+        # recree con keys nuevas y no quede con nombre/link recién tipeados.
+        if "recurso_form_key" not in st.session_state:
+            st.session_state.recurso_form_key = 0
+        fk = st.session_state.recurso_form_key
+
+        with st.form(f"form_recurso_{fk}"):
+            nombre = st.text_input("Nombre del recurso", key=f"recurso_nombre_{fk}")
+            tipo = st.selectbox("Tipo", TIPOS, key=f"recurso_tipo_{fk}")
+            link = st.text_input("Link (Google Drive, Dropbox, NotebookLM, etc.)", key=f"recurso_link_{fk}")
             submit = st.form_submit_button("💾 Guardar", use_container_width=True)
         if submit:
             if not nombre or not link:
                 st.error("Completá nombre y link.")
             else:
                 agregar_recurso(usuario["id"], materia_id, nombre, tipo, link)
+                st.session_state.recurso_form_key += 1
                 st.success("Recurso agregado.")
                 st.rerun()
 
@@ -160,4 +168,3 @@ def mostrar(usuario):
                         st.rerun()
 
         st.markdown("---")
-

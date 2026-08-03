@@ -373,6 +373,12 @@ def mostrar_alerta_asistencia(materias_cursando, todas_configs, faltas_map, feri
 def mostrar_config_fechas(usuario_id, anio_actual, cuatrimestre_actual, todas_configs):
     config_actual = todas_configs.get((anio_actual, cuatrimestre_actual))
 
+    # Contador de reseteo (ítem "formularios deben volver limpios", 02/08/2026):
+    # se incrementa después de guardar para que el form se recree con keys
+    # nuevas y no quede con los valores recién tipeados pegados en pantalla.
+    if "config_cuatri_form_key" not in st.session_state:
+        st.session_state.config_cuatri_form_key = 0
+
     with st.expander("⚙️ Configurar fechas del cuatrimestre", expanded=not config_actual):
         st.caption("Definí las fechas de inicio y fin para calcular el progreso de cada materia.")
 
@@ -396,19 +402,20 @@ def mostrar_config_fechas(usuario_id, anio_actual, cuatrimestre_actual, todas_co
         config_existente = todas_configs.get((anio_actual, cuatri_editar))
         def_ini, def_fin = defaults.get(cuatri_editar, (date(anio_actual, 3, 1), date(anio_actual, 11, 30)))
 
-        with st.form("form_config_cuatrimestre"):
+        fk = st.session_state.config_cuatri_form_key
+        with st.form(f"form_config_cuatrimestre_{fk}"):
             col1, col2, col3 = st.columns(3)
             with col1:
                 anio_cfg = st.number_input("Año", min_value=2020, max_value=2040,
-                                           value=anio_actual, key="cfg_anio")
+                                           value=anio_actual, key=f"cfg_anio_{fk}")
             with col2:
                 fecha_ini = st.date_input("Fecha de inicio",
                                           value=config_existente[0] if config_existente else def_ini,
-                                          key="cfg_ini")
+                                          key=f"cfg_ini_{fk}")
             with col3:
                 fecha_fin = st.date_input("Fecha de fin",
                                           value=config_existente[1] if config_existente else def_fin,
-                                          key="cfg_fin")
+                                          key=f"cfg_fin_{fk}")
 
             col_g, col_c = st.columns(2)
             with col_g:
@@ -421,6 +428,7 @@ def mostrar_config_fechas(usuario_id, anio_actual, cuatrimestre_actual, todas_co
                 st.error("La fecha de fin debe ser posterior a la de inicio.")
             else:
                 guardar_config_cuatrimestre(usuario_id, anio_cfg, cuatri_editar, fecha_ini, fecha_fin)
+                st.session_state.config_cuatri_form_key += 1
                 st.success(f"✅ Fechas guardadas: {fecha_ini.strftime('%d/%m/%Y')} → {fecha_fin.strftime('%d/%m/%Y')}")
                 st.rerun()
 
@@ -475,22 +483,30 @@ def mostrar_config_feriados(usuario_id):
     (feriados, paros, suspensiones puntuales) al calcular la asistencia."""
     feriados = get_feriados(usuario_id)
 
+    # Contador de reseteo (ítem "formularios deben volver limpios", 02/08/2026):
+    # se incrementa después de guardar para que el form se recree con keys
+    # nuevas y no quede con la fecha/descripción recién tipeadas en pantalla.
+    if "feriado_form_key" not in st.session_state:
+        st.session_state.feriado_form_key = 0
+
     with st.expander("🗓️ Feriados / días sin clase", expanded=False):
         st.caption(
             "Cargá acá las fechas que no se dictaron clase (feriados, paros, suspensiones). "
             "No se van a contar como clase al calcular tu % de asistencia."
         )
 
-        with st.form("form_nuevo_feriado"):
+        fk = st.session_state.feriado_form_key
+        with st.form(f"form_nuevo_feriado_{fk}"):
             col1, col2 = st.columns([1, 2])
             with col1:
-                fecha_feriado = st.date_input("Fecha", value=date.today(), key="nuevo_feriado_fecha")
+                fecha_feriado = st.date_input("Fecha", value=date.today(), key=f"nuevo_feriado_fecha_{fk}")
             with col2:
-                desc_feriado = st.text_input("Descripción (opcional)", key="nuevo_feriado_desc")
+                desc_feriado = st.text_input("Descripción (opcional)", key=f"nuevo_feriado_desc_{fk}")
             agregar = st.form_submit_button("➕ Agregar", use_container_width=True)
 
         if agregar:
             agregar_feriado(usuario_id, fecha_feriado, desc_feriado.strip() or None)
+            st.session_state.feriado_form_key += 1
             st.success("Feriado agregado.")
             st.rerun()
 

@@ -408,18 +408,33 @@ def mostrar(usuario):
                                         st.rerun()
 
                 if not programa and st.session_state.get(f"cargando_programa_{mid}"):
-                    with st.form(f"form_prog_{mid}"):
-                        nuevo_link = st.text_input("Link del programa (Google Drive, Dropbox, PDF, etc.)")
+                    # Contador de reseteo (ítem "formularios deben volver
+                    # limpios", 02/08/2026): se incrementa al guardar y al
+                    # cancelar, para que el form vuelva limpio la próxima
+                    # vez que se abra, en vez de quedar con el link tipeado
+                    # en un intento anterior.
+                    prog_key = f"prog_form_key_{mid}"
+                    if prog_key not in st.session_state:
+                        st.session_state[prog_key] = 0
+                    fk = st.session_state[prog_key]
+
+                    with st.form(f"form_prog_{mid}_{fk}"):
+                        nuevo_link = st.text_input(
+                            "Link del programa (Google Drive, Dropbox, PDF, etc.)",
+                            key=f"prog_link_{mid}_{fk}"
+                        )
                         col1f, col2f = st.columns(2)
                         with col1f:
                             if st.form_submit_button("💾 Guardar", use_container_width=True):
                                 if nuevo_link.strip():
                                     guardar_programa(usuario["id"], mid, nuevo_link.strip())
                                     st.session_state[f"cargando_programa_{mid}"] = False
+                                    st.session_state[prog_key] += 1
                                     st.rerun()
                         with col2f:
                             if st.form_submit_button("❌ Cancelar", use_container_width=True):
                                 st.session_state[f"cargando_programa_{mid}"] = False
+                                st.session_state[prog_key] += 1
                                 st.rerun()
 
             st.markdown("---")

@@ -236,12 +236,24 @@ def mostrar(usuario):
 
         if "form_opinion_key" not in st.session_state:
             st.session_state.form_opinion_key = 0
+        fk = st.session_state.form_opinion_key
 
-        with st.form(f"form_opinion_{st.session_state.form_opinion_key}"):
-            profesor = st.text_input("Nombre del profesor/a")
-            materia_label = st.selectbox("Materia que dicta", opciones_lista, index=0)
-            valoracion = st.radio("Valoración", VALORACIONES, horizontal=True)
-            observaciones = st.text_area("Observaciones (opcional)", height=100)
+        # Cada widget lleva su propia key atada al contador de reseteo `fk`
+        # (mismo patrón que feriados/faltas/comisiones/evaluaciones/recursos,
+        # ítem "formularios deben volver limpios", 02/08/2026). Sin esto, el
+        # form_opinion_key igual cambia el nombre del st.form, pero los
+        # widgets de adentro conservan lo tipeado porque no tenían key propia.
+        with st.form(f"form_opinion_{fk}"):
+            profesor = st.text_input("Nombre del profesor/a", key=f"opinion_profesor_{fk}")
+            materia_label = st.selectbox(
+                "Materia que dicta", opciones_lista, index=0, key=f"opinion_materia_{fk}"
+            )
+            valoracion = st.radio(
+                "Valoración", VALORACIONES, horizontal=True, key=f"opinion_valoracion_{fk}"
+            )
+            observaciones = st.text_area(
+                "Observaciones (opcional)", height=100, key=f"opinion_obs_{fk}"
+            )
             submit = st.form_submit_button("💾 Guardar opinión", use_container_width=True)
 
         if submit:
@@ -268,25 +280,35 @@ def mostrar(usuario):
 
         if "form_terceros_key" not in st.session_state:
             st.session_state.form_terceros_key = 0
+        fk_t = st.session_state.form_terceros_key
 
+        # Cada widget con key atada a `fk_t` (mismo patrón que el resto de
+        # los formularios "que deben volver limpios", 02/08/2026 / 04/08/2026).
         with st.expander("➕ Cargar recomendación de un tercero"):
-            with st.form(f"form_terceros_{st.session_state.form_terceros_key}"):
+            with st.form(f"form_terceros_{fk_t}"):
                 col_ap, col_no = st.columns(2)
                 with col_ap:
-                    t_apellido = st.text_input("Apellido del profesor/a")
+                    t_apellido = st.text_input("Apellido del profesor/a", key=f"terceros_apellido_{fk_t}")
                 with col_no:
-                    t_nombre = st.text_input("Nombre del profesor/a")
+                    t_nombre = st.text_input("Nombre del profesor/a", key=f"terceros_nombre_{fk_t}")
 
-                t_valoracion = st.radio("Valoración", VALORACIONES, horizontal=True)
+                t_valoracion = st.radio(
+                    "Valoración", VALORACIONES, horizontal=True, key=f"terceros_valoracion_{fk_t}"
+                )
 
                 st.markdown("**Materias que dicta** _(hasta 5, completá al menos una)_")
                 t_materias_labels = []
                 for i in range(5):
                     t_materias_labels.append(
-                        st.selectbox(f"Materia {i + 1}", opciones_mat_lista, index=0)
+                        st.selectbox(
+                            f"Materia {i + 1}", opciones_mat_lista, index=0,
+                            key=f"terceros_materia_{i}_{fk_t}"
+                        )
                     )
 
-                t_observaciones = st.text_area("Observaciones (opcional)", height=100)
+                t_observaciones = st.text_area(
+                    "Observaciones (opcional)", height=100, key=f"terceros_obs_{fk_t}"
+                )
                 submit_terceros = st.form_submit_button("💾 Guardar recomendación", use_container_width=True)
 
             if submit_terceros:

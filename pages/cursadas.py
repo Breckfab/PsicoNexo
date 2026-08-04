@@ -831,38 +831,44 @@ def mostrar(usuario):
         # cursada sin haber elegido materia explícitamente.
         opciones_lista = ["Elegí una materia"] + list(opciones.keys())
 
-        with st.form(f"form_cursada_{st.session_state.form_cursada_key}"):
-            materia_label = st.selectbox("📚 Materia (ordenada por año)", opciones_lista, index=0)
+        fk = st.session_state.form_cursada_key
+        with st.form(f"form_cursada_{fk}"):
+            materia_label = st.selectbox(
+                "📚 Materia (ordenada por año)", opciones_lista, index=0, key=f"cursada_materia_{fk}"
+            )
             col1, col2 = st.columns(2)
             with col1:
-                anio = st.number_input("Año de cursada", min_value=2000, max_value=2100, value=datetime.now().year)
-                cuatrimestre = st.selectbox("Cuatrimestre", CUATRIMESTRES)
-                turno = st.selectbox("Turno", TURNOS)
+                anio = st.number_input(
+                    "Año de cursada", min_value=2000, max_value=2100, value=datetime.now().year,
+                    key=f"cursada_anio_{fk}"
+                )
+                cuatrimestre = st.selectbox("Cuatrimestre", CUATRIMESTRES, key=f"cursada_cuatri_{fk}")
+                turno = st.selectbox("Turno", TURNOS, key=f"cursada_turno_{fk}")
             with col2:
-                modalidad = st.selectbox("Modalidad", MODALIDADES)
-                horario = st.text_input("Horario (ej: 18:30)")
-                link = st.text_input("Link de clase online")
+                modalidad = st.selectbox("Modalidad", MODALIDADES, key=f"cursada_modalidad_{fk}")
+                horario = st.text_input("Horario (ej: 18:30)", key=f"cursada_horario_{fk}")
+                link = st.text_input("Link de clase online", key=f"cursada_link_{fk}")
             col3, col4 = st.columns(2)
             with col3:
-                dias_sel = st.multiselect("Días de cursada", DIAS)
+                dias_sel = st.multiselect("Días de cursada", DIAS, key=f"cursada_dias_{fk}")
             with col4:
-                comision = st.text_input("Comisión (ej: COM V)", value="COM I")
+                comision = st.text_input("Comisión (ej: COM V)", value="COM I", key=f"cursada_comision_{fk}")
             col1, col2 = st.columns(2)
             with col1:
-                profesor1 = st.text_input("Profesor/a 1")
-                email_profesor1 = st.text_input("Email Profesor/a 1")
+                profesor1 = st.text_input("Profesor/a 1", key=f"cursada_prof1_{fk}")
+                email_profesor1 = st.text_input("Email Profesor/a 1", key=f"cursada_email1_{fk}")
             with col2:
-                profesor2 = st.text_input("Profesor/a 2 (opcional)")
-                email_profesor2 = st.text_input("Email Profesor/a 2 (opcional)")
+                profesor2 = st.text_input("Profesor/a 2 (opcional)", key=f"cursada_prof2_{fk}")
+                email_profesor2 = st.text_input("Email Profesor/a 2 (opcional)", key=f"cursada_email2_{fk}")
 
             st.markdown("**📆 Fechas de evaluación** _(opcional, se pueden completar más adelante)_")
             col3, col4, col5 = st.columns(3)
             with col3:
-                fecha_parcial1 = st.date_input("1er Parcial", value=None)
+                fecha_parcial1 = st.date_input("1er Parcial", value=None, key=f"cursada_fp1_{fk}")
             with col4:
-                fecha_parcial2 = st.date_input("2do Parcial", value=None)
+                fecha_parcial2 = st.date_input("2do Parcial", value=None, key=f"cursada_fp2_{fk}")
             with col5:
-                fecha_final = st.date_input("Final", value=None)
+                fecha_final = st.date_input("Final", value=None, key=f"cursada_ffinal_{fk}")
 
             submit = st.form_submit_button("💾 Guardar cursada", use_container_width=True)
 
@@ -963,9 +969,16 @@ def mostrar(usuario):
                 key_nueva = f"tarea_nueva_key_{materia_tarea_id}"
                 if key_nueva not in st.session_state:
                     st.session_state[key_nueva] = 0
-                with st.form(f"form_nueva_tarea_{materia_tarea_id}_{st.session_state[key_nueva]}"):
-                    desc = st.text_input(f"Descripción de la Tarea {nuevo_num}")
-                    fecha = st.date_input("Fecha de vencimiento", value=hoy)
+                fk_tarea = st.session_state[key_nueva]
+                with st.form(f"form_nueva_tarea_{materia_tarea_id}_{fk_tarea}"):
+                    desc = st.text_input(
+                        f"Descripción de la Tarea {nuevo_num}",
+                        key=f"tarea_nueva_desc_{materia_tarea_id}_{fk_tarea}"
+                    )
+                    fecha = st.date_input(
+                        "Fecha de vencimiento", value=hoy,
+                        key=f"tarea_nueva_fecha_{materia_tarea_id}_{fk_tarea}"
+                    )
                     if st.form_submit_button("💾 Guardar", use_container_width=True):
                         guardar_tarea(usuario["id"], materia_tarea_id, nuevo_num, desc, fecha)
                         st.session_state[key_nueva] += 1

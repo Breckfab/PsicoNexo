@@ -1,7 +1,11 @@
 import streamlit as st
 import pandas as pd
-from db import get_conn
-from utils import NOMBRES_ANIO, ORDEN_CUATRI, CUATRI_TEXTO
+import altair as alt
+from db import get_conn, get_feriados, get_periodos_comision
+from utils import (
+    NOMBRES_ANIO, ORDEN_CUATRI, CUATRI_TEXTO,
+    contar_clases_en_rango, contar_clases_multi_periodo, clasificar_asistencia,
+)
 
 @st.cache_data(ttl=60)
 def get_avance_carrera(usuario_id, carrera_id):
@@ -68,6 +72,166 @@ def get_tasa_aprobacion(usuario_id):
                 GROUP BY tipo;
             """, (usuario_id,))
             return cur.fetchall()
+
+# ─── Historial visual de asistencia (ítem #1 de "Cosas por Hacer", 03/08/2026) ──
+# Reutiliza el mismo criterio de cálculo que ya usan home.py y cursadas.py
+# (contar_clases_en_rango / contar_clases_multi_periodo + clasificar_asistencia),
+# para que el % de asistencia mostrado acá sea siempre consistente con el que
+# ve el alumno en esas otras pantallas. Cubre TODAS las cursadas del alumno
+# (no solo la del cuatrimestre actual), para que sirva como historial.
+
+@st.cache_data(ttl=60)
+def get_cursadas_para_asistencia(usuario_id):
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT m.id, m.nombre, m.anio, c.id, c.anio_cursada, c.cuatrimestre,
+                       c.dias, c.numero_comision, c.fecha_desde_comision
+                FROM cursadas c
+                JOIN materias m ON c.materia_id = m.id
+                WHERE c.usuario_id = %s
+                ORDER BY c.anio_cursada DESC, c.cuatrimestre, m.nombre;
+            """, (usuario_id,))
+            return cur.fetchall()
+
+@st.cache_data(ttl=300)
+def get_configs_cuatrimestre_estadisticas(usuario_id):
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT anio, cuatrimestre, fecha_inicio, fecha_fin
+                FROM configuracion_cuatrimestre
+                WHERE usuario_id = %s;
+            """, (usuario_id,))
+            rows = cur.fetchall()
+    return {(r[0], r[1]): (r[2], r[3]) for r in rows}
+
+@st.cache_data(ttl=60)
+def get_faltas_todas_materias(usuario_id):
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT materia_id, COUNT(*)
+                FROM asistencias
+                WHERE usuario_id = %s
+                GROUP BY materia_id;
+            """, (usuario_id,))
+            return {r[0]: r[1] for r in cur.fetchall()}
+
+def calcular_historial_asistencia(usuario_id):
+    """
+    Devuelve una lista de dicts, uno por cada cursada del alumno que tenga
+    fechas de cuatrimestre configuradas y días de cursada cargados:
+    {materia, anio, anio_cursada, cuatrimestre, numero_comision,
+     clases_totales, faltas, porcentaje}
+    Cursadas sin config de fechas o sin clases calculables se omiten
+    (mismo criterio silencioso que ya usan mostrar_asistencia() en
+    cursadas.py y mostrar_chip_asistencia() en home.py).
+    """
+    cursadas = get_cursadas_para_asistencia(usuario_id)
+    if not cursadas:
+        return []
+
+    configs = get_configs_cuatrimestre_estadisticas(usuario_id)
+    faltas_map = get_faltas_todas_materias(usuario_id)
+    feriados_set = {f[1] for f in get_feriados(usuario_id)}
+
+    resultado = []
+    for (mid, mnombre, manio, cid, anio_cursada, cuatri, dias,
+         numero_comision, fecha_desde_comision) in cursadas:
+
+        config = configs.get((anio_cursada, cuatri))
+        if not config:
+            continue
+        fecha_inicio, fecha_fin = config
+
+        if cid and fecha_desde_comision:
+            periodos = get_periodos_comision(cid, dias, fecha_desde_comision)
+            clases_totales = contar_clases_multi_periodo(periodos, fecha_inicio, fecha_fin, feriados_set)
+        else:
+            clases_totales = contar_clases_en_rango(dias, fecha_inicio, fecha_fin, feriados_set)
+
+        if clases_totales == 0:
+            continue
+
+        faltas = faltas_map.get(mid, 0)
+        porcentaje = round(((clases_totales - faltas) / clases_totales) * 100, 1)
+
+        resultado.append({
+            "materia": mnombre,
+            "anio": manio,
+            "anio_cursada": anio_cursada,
+            "cuatrimestre": cuatri,
+            "numero_comision": numero_comision,
+            "clases_totales": clases_totales,
+            "faltas": faltas,
+            "porcentaje": porcentaje,
+        })
+
+    resultado.sort(key=lambda r: (-r["anio_cursada"], ORDEN_CUATRI.get(r["cuatrimestre"], 9), r["materia"]))
+    return resultado
+
+def mostrar_historial_asistencia(usuario_id):
+    st.markdown("### 📅 Historial de asistencia")
+
+    datos = calcular_historial_asistencia(usuario_id)
+
+    if not datos:
+        st.info(
+            "Todavía no hay datos suficientes para calcular el historial de asistencia. "
+            "Necesitás tener días de cursada cargados y las fechas del cuatrimestre configuradas en Inicio."
+        )
+        return
+
+    df = pd.DataFrame(datos)
+    df["cuatri_texto"] = df["cuatrimestre"].map(lambda c: CUATRI_TEXTO.get(c, c))
+    df["etiqueta"] = df.apply(
+        lambda r: f"{r['materia']} — {r['cuatri_texto']} {r['anio_cursada']}"
+        + (f" ({r['numero_comision']})" if r["numero_comision"] else ""),
+        axis=1
+    )
+    df["color"] = df["porcentaje"].apply(
+        lambda p: clasificar_asistencia(p)[0]
+    )
+
+    altura = max(200, 36 * len(df))
+
+    chart = alt.Chart(df).mark_bar().encode(
+        x=alt.X("porcentaje:Q", title="Asistencia (%)", scale=alt.Scale(domain=[0, 100])),
+        y=alt.Y("etiqueta:N", sort="-x", title=None),
+        color=alt.Color("color:N", scale=None, legend=None),
+        tooltip=[
+            alt.Tooltip("materia:N", title="Materia"),
+            alt.Tooltip("cuatri_texto:N", title="Cuatrimestre"),
+            alt.Tooltip("anio_cursada:N", title="Año cursada"),
+            alt.Tooltip("porcentaje:Q", title="Asistencia %"),
+            alt.Tooltip("faltas:Q", title="Faltas"),
+            alt.Tooltip("clases_totales:Q", title="Clases totales"),
+        ]
+    ).properties(height=altura)
+
+    linea_75 = alt.Chart(pd.DataFrame({"x": [75]})).mark_rule(
+        color="#e74c3c", strokeDash=[4, 4]
+    ).encode(x="x:Q")
+
+    st.altair_chart(chart + linea_75, use_container_width=True)
+    st.caption("La línea punteada roja marca el 75% mínimo de asistencia.")
+
+    with st.expander("📋 Ver detalle completo"):
+        df_detalle = df[["materia", "anio", "cuatri_texto", "anio_cursada", "numero_comision",
+                          "clases_totales", "faltas", "porcentaje"]].copy()
+        df_detalle["anio"] = df_detalle["anio"].map(lambda a: NOMBRES_ANIO.get(a, a))
+        df_detalle = df_detalle.rename(columns={
+            "materia": "Materia",
+            "anio": "Año carrera",
+            "cuatri_texto": "Cuatrimestre",
+            "anio_cursada": "Año cursada",
+            "numero_comision": "Comisión",
+            "clases_totales": "Clases totales",
+            "faltas": "Faltas",
+            "porcentaje": "Asistencia %",
+        })
+        st.dataframe(df_detalle, use_container_width=True, hide_index=True)
 
 
 def mostrar(usuario):
@@ -189,3 +353,8 @@ def mostrar(usuario):
             porcentaje = round((aprobados / total) * 100, 1) if total > 0 else 0
             with cols[i]:
                 st.metric(tipo, f"{porcentaje}%", f"{aprobados}/{total}")
+
+    st.markdown("---")
+
+    # ── Historial visual de asistencia ────────────────────────────────
+    mostrar_historial_asistencia(usuario["id"])

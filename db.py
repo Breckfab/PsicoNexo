@@ -463,6 +463,15 @@ def get_historial_comisiones(cursada_id):
             """, (cursada_id,))
             return cur.fetchall()
 
+# Cacheada (ítem de prioridad alta-latencia, "Cachear get_periodos_comision()
+# en db.py", 07/08/2026): esta función ya reutilizaba get_historial_comisiones
+# (cacheada), pero el armado de la lista de períodos se repetía en cada
+# llamada. Como se invoca una vez por cada materia cursando en cursadas.py,
+# home.py y estadisticas.py dentro de un mismo render, cachearla evita ese
+# trabajo redundante. TTL igual al de get_historial_comisiones (120s), ya
+# que depende del mismo dato subyacente. Se invalida junto con ella en
+# cambiar_comision() (pages/cursadas.py).
+@st.cache_data(ttl=120)
 def get_periodos_comision(cursada_id, dias_actual, fecha_desde_actual):
     """
     Arma la lista completa de períodos de comisión de una cursada (los

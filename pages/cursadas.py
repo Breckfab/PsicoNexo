@@ -268,6 +268,11 @@ def cambiar_comision(usuario_id, materia_id, fecha_cambio, nuevo_numero, nuevo_t
     get_todas_cursadas.clear()
     get_clases_hoy.clear()
     get_historial_comisiones.clear()
+    # Invalida también la caché de get_periodos_comision (07/08/2026): al
+    # cerrar el período vigente y abrir uno nuevo, la lista de períodos de
+    # esta cursada cambia, así que hay que descartar lo que haya quedado
+    # cacheado bajo la fecha_desde_comision anterior.
+    get_periodos_comision.clear()
     return True, f"Comisión actualizada a {nuevo_numero}."
 
 def borrar_cursada(usuario_id, materia_id):

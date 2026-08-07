@@ -6,6 +6,13 @@ from utils import (
     NOMBRES_ANIO, ORDEN_CUATRI, CUATRI_TEXTO,
     contar_clases_en_rango, contar_clases_multi_periodo, clasificar_asistencia,
 )
+from io import BytesIO
+from reportlab.lib.pagesizes import A4
+from reportlab.lib import colors
+from reportlab.lib.units import cm
+from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.enums import TA_CENTER
 
 @st.cache_data(ttl=60)
 def get_avance_carrera(usuario_id, carrera_id):
@@ -118,6 +125,20 @@ def get_faltas_todas_materias(usuario_id):
             """, (usuario_id,))
             return {r[0]: r[1] for r in cur.fetchall()}
 
+# Duplicada deliberadamente de historial.py (mismo criterio que ya se usa en
+# el resto del proyecto para queries chicas y de un solo uso — ver
+# get_todas_materias en cursadas.py/evaluaciones.py/profesores.py, o
+# get_materias_alumno en materias.py/recursos.py). Se necesita acá para poder
+# armar el encabezado "Alumno/a: ..." del PDF de asistencia sin que
+# cursadas.py tenga que ir a buscarla a otro módulo de página aparte.
+@st.cache_data(ttl=300)
+def get_nombre_usuario(usuario_id):
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT nombre FROM usuarios WHERE id = %s;", (usuario_id,))
+            row = cur.fetchone()
+    return row[0] if row else "Alumno"
+
 def calcular_historial_asistencia(usuario_id):
     """
     Devuelve una lista de dicts, uno por cada cursada del alumno que tenga
@@ -170,6 +191,129 @@ def calcular_historial_asistencia(usuario_id):
 
     resultado.sort(key=lambda r: (-r["anio_cursada"], ORDEN_CUATRI.get(r["cuatrimestre"], 9), r["materia"]))
     return resultado
+
+# ─── Exportar asistencia a PDF (ítem de prioridad media-alta, 05/08/2026) ───
+# Reutiliza el mismo patrón de generar_pdf() que ya está en historial.py
+# (mismos estilos, misma paleta violeta #7B2FBE) y la data ya armada por
+# calcular_historial_asistencia(), para no duplicar lógica de cálculo.
+# Los botones de descarga viven en cursadas.py (no acá), tanto el general
+# (todas las cursadas del alumno) como el individual por materia — esta
+# función solo arma el documento; recibe la lista de dicts ya filtrada
+# según corresponda.
+#
+# Si `filtro_materia` viene con un nombre, se asume que `datos` ya está
+# filtrado a esa materia (una o más cursadas de la misma materia, por si
+# se cursó más de una vez) y se omite la columna "Materia" de la tabla,
+# ya que es redundante con el título del PDF.
+
+def generar_pdf_asistencia(datos, nombre_alumno, filtro_materia=None):
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(
+        buffer,
+        pagesize=A4,
+        rightMargin=2*cm,
+        leftMargin=2*cm,
+        topMargin=2*cm,
+        bottomMargin=2*cm
+    )
+
+    styles = getSampleStyleSheet()
+    titulo_style = ParagraphStyle(
+        "titulo",
+        parent=styles["Title"],
+        fontSize=18,
+        textColor=colors.HexColor("#7B2FBE"),
+        alignment=TA_CENTER,
+        spaceAfter=4
+    )
+    subtitulo_style = ParagraphStyle(
+        "subtitulo",
+        parent=styles["Normal"],
+        fontSize=10,
+        textColor=colors.HexColor("#888888"),
+        alignment=TA_CENTER,
+        spaceAfter=2
+    )
+    info_style = ParagraphStyle(
+        "info",
+        parent=styles["Normal"],
+        fontSize=10,
+        textColor=colors.HexColor("#333333"),
+        spaceAfter=2
+    )
+
+    elementos = []
+    elementos.append(Paragraph("PsicoNexo", titulo_style))
+    subtitulo_texto = f"Asistencia — {filtro_materia}" if filtro_materia else "Historial de Asistencia"
+    elementos.append(Paragraph(subtitulo_texto, subtitulo_style))
+    elementos.append(Paragraph("Licenciatura en Psicologia - UdeMM", subtitulo_style))
+    elementos.append(Spacer(1, 0.3*cm))
+    elementos.append(Paragraph("Alumno/a: " + nombre_alumno, info_style))
+
+    cant = len(datos)
+    cursada_texto = "cursada" if cant == 1 else "cursadas"
+    elementos.append(Paragraph("Total: " + str(cant) + " " + cursada_texto, info_style))
+    elementos.append(Spacer(1, 0.5*cm))
+
+    if filtro_materia:
+        encabezado = ["Cuatrimestre", "Año cursada", "Comisión", "Clases", "Faltas", "Asistencia %"]
+        col_widths = [4.5*cm, 3*cm, 3*cm, 2.5*cm, 2.5*cm, 2.5*cm]
+    else:
+        encabezado = ["Materia", "Cuatrimestre", "Año", "Comisión", "Clases", "Faltas", "Asist. %"]
+        col_widths = [5*cm, 3*cm, 2*cm, 2.5*cm, 2*cm, 2*cm, 2.5*cm]
+
+    filas = [encabezado]
+    for d in datos:
+        cuatri_texto = CUATRI_TEXTO.get(d["cuatrimestre"], d["cuatrimestre"])
+        comision_texto = d["numero_comision"] or "-"
+        if filtro_materia:
+            filas.append([
+                cuatri_texto,
+                str(d["anio_cursada"]),
+                comision_texto,
+                str(d["clases_totales"]),
+                str(d["faltas"]),
+                f"{d['porcentaje']}%",
+            ])
+        else:
+            filas.append([
+                d["materia"],
+                cuatri_texto,
+                str(d["anio_cursada"]),
+                comision_texto,
+                str(d["clases_totales"]),
+                str(d["faltas"]),
+                f"{d['porcentaje']}%",
+            ])
+
+    tabla = Table(filas, colWidths=col_widths)
+    tabla.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#7B2FBE")),
+        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+        ("FONTSIZE", (0, 0), (-1, 0), 10),
+        ("ALIGN", (0, 0), (-1, 0), "CENTER"),
+        ("BOTTOMPADDING", (0, 0), (-1, 0), 8),
+        ("TOPPADDING", (0, 0), (-1, 0), 8),
+        ("FONTNAME", (0, 1), (-1, -1), "Helvetica"),
+        ("FONTSIZE", (0, 1), (-1, -1), 9),
+        ("ALIGN", (1, 1), (-1, -1), "CENTER"),
+        ("ALIGN", (0, 1), (0, -1), "LEFT"),
+        ("TOPPADDING", (0, 1), (-1, -1), 6),
+        ("BOTTOMPADDING", (0, 1), (-1, -1), 6),
+        ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#CCCCCC")),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#F3F0FF")]),
+    ]))
+
+    elementos.append(tabla)
+
+    if not datos:
+        elementos.append(Spacer(1, 0.5*cm))
+        elementos.append(Paragraph("No hay datos de asistencia disponibles todavia.", info_style))
+
+    doc.build(elementos)
+    buffer.seek(0)
+    return buffer
 
 def mostrar_historial_asistencia(usuario_id):
     st.markdown("### 📅 Historial de asistencia")

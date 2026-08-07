@@ -3,6 +3,7 @@ from db import get_conn, get_feriados, get_clases_hoy, get_historial_comisiones,
 from datetime import datetime, date, timedelta
 import re
 from utils import NOMBRES_ANIO, DIA_INDEX, contar_clases_en_rango, contar_clases_multi_periodo, clasificar_asistencia, convertir_link_preview
+from pages.estadisticas import calcular_historial_asistencia, generar_pdf_asistencia, get_nombre_usuario
 
 MODALIDADES = ["Presencial", "Híbrida", "Asincrónica"]
 TURNOS = ["Mañana", "Tarde", "Noche"]
@@ -664,9 +665,28 @@ def mostrar(usuario):
         todas_cursadas = get_todas_cursadas(usuario["id"])
         todos_programas = get_todos_programas_cursada(usuario["id"])
 
+        # ── Exportar asistencia a PDF (ítem de prioridad media-alta, 05/08/2026) ──
+        # Se calcula una sola vez acá y se reutiliza tanto para el botón
+        # general (todas las cursadas del alumno) como para los botones
+        # individuales por materia más abajo, para no repetir la consulta.
+        historial_asistencia = calcular_historial_asistencia(usuario["id"])
+
         if not materias_cursando:
             st.info("No tenés materias marcadas como 'cursando'. Cambiá el estado en Plan de Estudios.")
         else:
+            if historial_asistencia:
+                nombre_alumno_pdf = get_nombre_usuario(usuario["id"])
+                pdf_general = generar_pdf_asistencia(historial_asistencia, nombre_alumno_pdf)
+                st.download_button(
+                    label="⬇️ Descargar PDF de asistencia (todas las materias)",
+                    data=pdf_general,
+                    file_name="asistencia_general.pdf",
+                    mime="application/pdf",
+                    key="pdf_asistencia_general",
+                    use_container_width=True
+                )
+                st.markdown("---")
+
             for m in materias_cursando:
                 mid, mnombre, manio = m
                 cursada = todas_cursadas.get(mid)
@@ -723,6 +743,24 @@ def mostrar(usuario):
 
                         # ── Sección de asistencia ─────────────────────────
                         mostrar_asistencia(usuario, mid, dias, anio, cuatri, cid, fecha_desde_comision)
+
+                        # ── Exportar a PDF la asistencia de esta materia ──
+                        # Reutiliza historial_asistencia (calculado una sola
+                        # vez arriba) filtrando por nombre de materia, para
+                        # cubrir también el caso de que se haya cursado más
+                        # de una vez (varias filas para la misma materia).
+                        datos_materia = [d for d in historial_asistencia if d["materia"] == mnombre]
+                        if datos_materia:
+                            nombre_alumno_pdf = get_nombre_usuario(usuario["id"])
+                            pdf_materia = generar_pdf_asistencia(datos_materia, nombre_alumno_pdf, filtro_materia=mnombre)
+                            st.download_button(
+                                label="⬇️ Descargar PDF de asistencia de esta materia",
+                                data=pdf_materia,
+                                file_name=f"asistencia_{mnombre.replace(' ', '_')}.pdf",
+                                mime="application/pdf",
+                                key=f"pdf_asistencia_{mid}",
+                                use_container_width=True
+                            )
 
                         # ── Comisión: panel + cambio + historial ──────────
                         mostrar_gestion_comision(

@@ -14,81 +14,18 @@ from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, 
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.enums import TA_CENTER
 
-@st.cache_data(ttl=60)
-def get_avance_carrera(usuario_id, carrera_id):
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute("""
-                SELECT m.anio, COALESCE(am.estado, 'pendiente') as estado, COUNT(*) as cantidad
-                FROM materias m
-                LEFT JOIN alumno_materias am ON m.id = am.materia_id AND am.usuario_id = %s
-                WHERE m.carrera_id = %s
-                GROUP BY m.anio, estado
-                ORDER BY m.anio;
-            """, (usuario_id, carrera_id))
-            return cur.fetchall()
+# ─── Batch de datos para el historial de asistencia (ítem "Consolidar
+# Estadísticas.py en 1-2 queries batch", 07/08/2026) ────────────────────────
+# Antes eran 3 funciones cacheadas por separado (get_cursadas_para_asistencia,
+# get_configs_cuatrimestre_estadisticas, get_faltas_todas_materias), cada una
+# pidiendo su propia conexión al pool. Se consolidan acá en una sola conexión,
+# porque en Neon (serverless) el costo real no es tanto la query en sí sino el
+# round-trip de adquirir/chequear la conexión — pedirla 1 vez en lugar de 3
+# achica bastante la latencia de carga de esta pantalla. La usa tanto
+# estadisticas.py como cursadas.py (vía calcular_historial_asistencia).
 
 @st.cache_data(ttl=60)
-def get_evolucion_promedios(usuario_id):
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute("""
-                SELECT c.anio_cursada, c.cuatrimestre, AVG(e.nota) as promedio
-                FROM evaluaciones e
-                JOIN cursadas c ON c.materia_id = e.materia_id AND c.usuario_id = e.usuario_id
-                WHERE e.usuario_id = %s AND e.nota IS NOT NULL
-                GROUP BY c.anio_cursada, c.cuatrimestre
-                ORDER BY c.anio_cursada;
-            """, (usuario_id,))
-            return cur.fetchall()
-
-@st.cache_data(ttl=60)
-def get_promedio_materias(usuario_id):
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute("""
-                SELECT m.nombre, m.anio, AVG(e.nota) as promedio, COUNT(e.id) as cantidad_notas
-                FROM evaluaciones e
-                JOIN materias m ON e.materia_id = m.id
-                WHERE e.usuario_id = %s AND e.nota IS NOT NULL
-                GROUP BY m.nombre, m.anio
-                ORDER BY promedio DESC;
-            """, (usuario_id,))
-            return cur.fetchall()
-
-@st.cache_data(ttl=60)
-def get_notas(usuario_id):
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute("""
-                SELECT nota FROM evaluaciones
-                WHERE usuario_id = %s AND nota IS NOT NULL;
-            """, (usuario_id,))
-            return [r[0] for r in cur.fetchall()]
-
-@st.cache_data(ttl=60)
-def get_tasa_aprobacion(usuario_id):
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute("""
-                SELECT tipo,
-                       COUNT(*) FILTER (WHERE aprobado = TRUE) as aprobados,
-                       COUNT(*) as total
-                FROM evaluaciones
-                WHERE usuario_id = %s
-                GROUP BY tipo;
-            """, (usuario_id,))
-            return cur.fetchall()
-
-# ─── Historial visual de asistencia (ítem #1 de "Cosas por Hacer", 03/08/2026) ──
-# Reutiliza el mismo criterio de cálculo que ya usan home.py y cursadas.py
-# (contar_clases_en_rango / contar_clases_multi_periodo + clasificar_asistencia),
-# para que el % de asistencia mostrado acá sea siempre consistente con el que
-# ve el alumno en esas otras pantallas. Cubre TODAS las cursadas del alumno
-# (no solo la del cuatrimestre actual), para que sirva como historial.
-
-@st.cache_data(ttl=60)
-def get_cursadas_para_asistencia(usuario_id):
+def get_estadisticas_asistencia_data(usuario_id):
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute("""
@@ -99,31 +36,26 @@ def get_cursadas_para_asistencia(usuario_id):
                 WHERE c.usuario_id = %s
                 ORDER BY c.anio_cursada DESC, c.cuatrimestre, m.nombre;
             """, (usuario_id,))
-            return cur.fetchall()
+            cursadas_rows = cur.fetchall()
 
-@st.cache_data(ttl=300)
-def get_configs_cuatrimestre_estadisticas(usuario_id):
-    with get_conn() as conn:
-        with conn.cursor() as cur:
             cur.execute("""
                 SELECT anio, cuatrimestre, fecha_inicio, fecha_fin
                 FROM configuracion_cuatrimestre
                 WHERE usuario_id = %s;
             """, (usuario_id,))
-            rows = cur.fetchall()
-    return {(r[0], r[1]): (r[2], r[3]) for r in rows}
+            config_rows = cur.fetchall()
 
-@st.cache_data(ttl=60)
-def get_faltas_todas_materias(usuario_id):
-    with get_conn() as conn:
-        with conn.cursor() as cur:
             cur.execute("""
                 SELECT materia_id, COUNT(*)
                 FROM asistencias
                 WHERE usuario_id = %s
                 GROUP BY materia_id;
             """, (usuario_id,))
-            return {r[0]: r[1] for r in cur.fetchall()}
+            faltas_rows = cur.fetchall()
+
+    configs = {(r[0], r[1]): (r[2], r[3]) for r in config_rows}
+    faltas_map = {r[0]: r[1] for r in faltas_rows}
+    return cursadas_rows, configs, faltas_map
 
 # Duplicada deliberadamente de historial.py (mismo criterio que ya se usa en
 # el resto del proyecto para queries chicas y de un solo uso — ver
@@ -149,12 +81,10 @@ def calcular_historial_asistencia(usuario_id):
     (mismo criterio silencioso que ya usan mostrar_asistencia() en
     cursadas.py y mostrar_chip_asistencia() en home.py).
     """
-    cursadas = get_cursadas_para_asistencia(usuario_id)
+    cursadas, configs, faltas_map = get_estadisticas_asistencia_data(usuario_id)
     if not cursadas:
         return []
 
-    configs = get_configs_cuatrimestre_estadisticas(usuario_id)
-    faltas_map = get_faltas_todas_materias(usuario_id)
     feriados_set = {f[1] for f in get_feriados(usuario_id)}
 
     resultado = []
@@ -377,6 +307,62 @@ def mostrar_historial_asistencia(usuario_id):
         })
         st.dataframe(df_detalle, use_container_width=True, hide_index=True)
 
+# ─── Batch de datos generales de la pantalla (avance, evolución, ranking,
+# distribución de notas, tasa de aprobación) — mismo criterio que
+# get_estadisticas_asistencia_data: 1 conexión en vez de 5 (ítem "Consolidar
+# Estadísticas.py en 1-2 queries batch", 07/08/2026).
+
+@st.cache_data(ttl=60)
+def get_estadisticas_generales(usuario_id, carrera_id):
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT m.anio, COALESCE(am.estado, 'pendiente') as estado, COUNT(*) as cantidad
+                FROM materias m
+                LEFT JOIN alumno_materias am ON m.id = am.materia_id AND am.usuario_id = %s
+                WHERE m.carrera_id = %s
+                GROUP BY m.anio, estado
+                ORDER BY m.anio;
+            """, (usuario_id, carrera_id))
+            avance_rows = cur.fetchall()
+
+            cur.execute("""
+                SELECT c.anio_cursada, c.cuatrimestre, AVG(e.nota) as promedio
+                FROM evaluaciones e
+                JOIN cursadas c ON c.materia_id = e.materia_id AND c.usuario_id = e.usuario_id
+                WHERE e.usuario_id = %s AND e.nota IS NOT NULL
+                GROUP BY c.anio_cursada, c.cuatrimestre
+                ORDER BY c.anio_cursada;
+            """, (usuario_id,))
+            evolucion_rows = cur.fetchall()
+
+            cur.execute("""
+                SELECT m.nombre, m.anio, AVG(e.nota) as promedio, COUNT(e.id) as cantidad_notas
+                FROM evaluaciones e
+                JOIN materias m ON e.materia_id = m.id
+                WHERE e.usuario_id = %s AND e.nota IS NOT NULL
+                GROUP BY m.nombre, m.anio
+                ORDER BY promedio DESC;
+            """, (usuario_id,))
+            promedio_materias_rows = cur.fetchall()
+
+            cur.execute("""
+                SELECT nota FROM evaluaciones
+                WHERE usuario_id = %s AND nota IS NOT NULL;
+            """, (usuario_id,))
+            notas = [r[0] for r in cur.fetchall()]
+
+            cur.execute("""
+                SELECT tipo,
+                       COUNT(*) FILTER (WHERE aprobado = TRUE) as aprobados,
+                       COUNT(*) as total
+                FROM evaluaciones
+                WHERE usuario_id = %s
+                GROUP BY tipo;
+            """, (usuario_id,))
+            tasa_rows = cur.fetchall()
+
+    return avance_rows, evolucion_rows, promedio_materias_rows, notas, tasa_rows
 
 def mostrar(usuario):
     if not usuario:
@@ -386,9 +372,12 @@ def mostrar(usuario):
     st.title("📊 Estadísticas y Analíticas")
     st.caption("Un vistazo completo a tu rendimiento académico.")
 
+    avance_rows, evol_rows, prom_rows, notas, tasa_rows = get_estadisticas_generales(
+        usuario["id"], usuario["carrera_id"]
+    )
+
     # ── Avance de carrera ──────────────────────────────────────────
     st.markdown("### 🎯 Avance de carrera")
-    avance_rows = get_avance_carrera(usuario["id"], usuario["carrera_id"])
 
     if not avance_rows:
         st.info("No hay datos suficientes todavía.")
@@ -418,7 +407,6 @@ def mostrar(usuario):
 
     # ── Evolución de promedios ─────────────────────────────────────
     st.markdown("### 📈 Evolución de promedios")
-    evol_rows = get_evolucion_promedios(usuario["id"])
 
     if not evol_rows:
         st.info("Todavía no tenés notas cargadas con cursadas asociadas.")
@@ -437,7 +425,6 @@ def mostrar(usuario):
 
     # ── Promedio por materia ────────────────────────────────────────
     st.markdown("### 🏆 Promedio por materia")
-    prom_rows = get_promedio_materias(usuario["id"])
 
     if not prom_rows:
         st.info("Todavía no tenés notas cargadas.")
@@ -463,7 +450,6 @@ def mostrar(usuario):
 
     # ── Distribución de notas ───────────────────────────────────────
     st.markdown("### 📊 Distribución de notas")
-    notas = get_notas(usuario["id"])
 
     if not notas:
         st.info("Todavía no tenés notas cargadas.")
@@ -487,7 +473,6 @@ def mostrar(usuario):
 
     # ── Tasa de aprobación por tipo ──────────────────────────────────
     st.markdown("### ✅ Tasa de aprobación por tipo de evaluación")
-    tasa_rows = get_tasa_aprobacion(usuario["id"])
 
     if not tasa_rows:
         st.info("Todavía no tenés evaluaciones cargadas.")

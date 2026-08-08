@@ -9,6 +9,14 @@ from datetime import datetime
 
 load_dotenv()
 
+# ─── Uso de almacenamiento (Neon) ───────────────────────────────────────────
+# Límite de almacenamiento del plan Free de Neon (0.5 GiB). Postgres no tiene
+# forma de conocer el límite del plan contratado por SQL, así que queda como
+# constante acá — si en algún momento se actualiza el plan de Neon, hay que
+# actualizar este valor a mano (ítem "Administración → % de espacio libre en
+# Neon", 08/08/2026).
+NEON_STORAGE_LIMIT_BYTES = int(0.5 * 1024 * 1024 * 1024)  # 0.5 GiB = 536.870.912 bytes
+
 @st.cache_resource
 def get_database_url():
     return os.environ["DATABASE_URL"]
@@ -463,15 +471,6 @@ def get_historial_comisiones(cursada_id):
             """, (cursada_id,))
             return cur.fetchall()
 
-# Cacheada (ítem de prioridad alta-latencia, "Cachear get_periodos_comision()
-# en db.py", 07/08/2026): esta función ya reutilizaba get_historial_comisiones
-# (cacheada), pero el armado de la lista de períodos se repetía en cada
-# llamada. Como se invoca una vez por cada materia cursando en cursadas.py,
-# home.py y estadisticas.py dentro de un mismo render, cachearla evita ese
-# trabajo redundante. TTL igual al de get_historial_comisiones (120s), ya
-# que depende del mismo dato subyacente. Se invalida junto con ella en
-# cambiar_comision() (pages/cursadas.py).
-@st.cache_data(ttl=120)
 def get_periodos_comision(cursada_id, dias_actual, fecha_desde_actual):
     """
     Arma la lista completa de períodos de comisión de una cursada (los
@@ -485,3 +484,19 @@ def get_periodos_comision(cursada_id, dias_actual, fecha_desde_actual):
     periodos = [(h[3], h[10], h[11]) for h in historial]
     periodos.append((dias_actual, fecha_desde_actual, None))
     return periodos
+
+# ─── Uso de almacenamiento (Neon) ───────────────────────────────────────────
+# Usado por la sección "📦 Uso de almacenamiento (Neon)" del panel de
+# Administración (ítem nuevo, 08/08/2026). pg_database_size() devuelve el
+# tamaño real ocupado por la base en bytes; el % se calcula contra
+# NEON_STORAGE_LIMIT_BYTES (definido arriba). Cacheado 5 minutos: el tamaño
+# de la base no cambia lo suficientemente rápido como para justificar
+# consultarlo en cada rerun de Streamlit.
+
+@st.cache_data(ttl=300)
+def get_uso_almacenamiento():
+    """Devuelve el tamaño actual de la base de datos, en bytes."""
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT pg_database_size(current_database());")
+            return cur.fetchone()[0]

@@ -10,6 +10,129 @@ TURNOS = ["Mañana", "Tarde", "Noche"]
 CUATRIMESTRES = ["1° Cuatrimestre", "2° Cuatrimestre", "Anual"]
 DIAS = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado"]
 
+# ─── Exportar cursada a .ics (ítem prioridad media-alta, 07/08/2026) ───────
+# Mapeo de nombres de día en español al código de 2 letras que usa iCalendar
+# (RFC 5545, propiedad BYDAY). Se arma acá en vez de en utils.py porque solo
+# lo usa esta pantalla.
+DIA_ICAL = {
+    "Lunes": "MO", "Martes": "TU", "Miércoles": "WE", "Jueves": "TH",
+    "Viernes": "FR", "Sábado": "SA", "Domingo": "SU",
+}
+
+# Duración por defecto de una clase cuando se exporta a .ics: el sistema
+# solo guarda la hora de INICIO de la cursada (no la de fin), así que se
+# asume un bloque de 2hs, aclarado en la descripción del evento.
+DURACION_CLASE_ICS_HORAS = 2
+
+
+def _escape_ical(texto):
+    """Escapa caracteres especiales según RFC 5545 (,;\\ y saltos de línea)."""
+    if not texto:
+        return ""
+    return (
+        texto.replace("\\", "\\\\")
+        .replace(",", "\\,")
+        .replace(";", "\\;")
+        .replace("\n", "\\n")
+    )
+
+
+def generar_ics_cursada(materia_nombre, dias_str, horario, fecha_inicio, fecha_fin,
+                         modalidad, link, profesor1, profesor2, numero_comision, uid_seed):
+    """
+    Arma un archivo .ics (evento recurrente semanal) para importar la cursada
+    a Google Calendar / Outlook / Apple Calendar, en base a los días de
+    cursada, el horario y el rango de fechas del cuatrimestre ya configurado
+    en Home. Devuelve bytes listos para st.download_button, o None si no hay
+    datos suficientes (sin días cargados, o ningún día cae dentro del rango).
+    """
+    if not dias_str or not fecha_inicio or not fecha_fin or fecha_fin < fecha_inicio:
+        return None
+
+    dias_lista = [d.strip() for d in dias_str.split(",") if d.strip() in DIA_ICAL]
+    if not dias_lista:
+        return None
+
+    byday = ",".join(DIA_ICAL[d] for d in dias_lista)
+    indices = {DIA_INDEX[d] for d in dias_lista}
+
+    # Primera fecha, a partir del inicio del cuatrimestre, que cae en uno de
+    # los días de cursada — es la que se usa como DTSTART del evento.
+    primera = fecha_inicio
+    while primera.weekday() not in indices:
+        primera += timedelta(days=1)
+        if primera > fecha_fin:
+            return None
+
+    con_horario = False
+    hh, mm = None, None
+    if horario:
+        try:
+            hh_str, mm_str = horario.split(":")
+            hh, mm = int(hh_str), int(mm_str)
+            con_horario = True
+        except Exception:
+            con_horario = False
+
+    lines = [
+        "BEGIN:VCALENDAR",
+        "VERSION:2.0",
+        "PRODID:-//PsicoNexo//Cursadas//ES",
+        "CALSCALE:GREGORIAN",
+        "BEGIN:VTIMEZONE",
+        "TZID:America/Argentina/Buenos_Aires",
+        "BEGIN:STANDARD",
+        "DTSTART:19700101T000000",
+        "TZOFFSETFROM:-0300",
+        "TZOFFSETTO:-0300",
+        "TZNAME:-03",
+        "END:STANDARD",
+        "END:VTIMEZONE",
+        "BEGIN:VEVENT",
+        f"UID:{uid_seed}@psiconexo",
+        f"DTSTAMP:{datetime.now().strftime('%Y%m%dT%H%M%SZ')}",
+    ]
+
+    if con_horario:
+        dtstart_dt = datetime(primera.year, primera.month, primera.day, hh, mm)
+        dtend_dt = dtstart_dt + timedelta(hours=DURACION_CLASE_ICS_HORAS)
+        lines.append(f"DTSTART;TZID=America/Argentina/Buenos_Aires:{dtstart_dt.strftime('%Y%m%dT%H%M%S')}")
+        lines.append(f"DTEND;TZID=America/Argentina/Buenos_Aires:{dtend_dt.strftime('%Y%m%dT%H%M%S')}")
+        until_str = f"{fecha_fin.strftime('%Y%m%d')}T235959"
+    else:
+        lines.append(f"DTSTART;VALUE=DATE:{primera.strftime('%Y%m%d')}")
+        lines.append(f"DTEND;VALUE=DATE:{(primera + timedelta(days=1)).strftime('%Y%m%d')}")
+        until_str = fecha_fin.strftime("%Y%m%d")
+
+    lines.append(f"RRULE:FREQ=WEEKLY;BYDAY={byday};UNTIL={until_str}")
+    lines.append(f"SUMMARY:{_escape_ical(materia_nombre)}")
+
+    desc_partes = []
+    if modalidad:
+        desc_partes.append(f"Modalidad: {modalidad}")
+    profesores_texto = " / ".join(p for p in [profesor1, profesor2] if p)
+    if profesores_texto:
+        desc_partes.append(f"Profesor/a: {profesores_texto}")
+    if numero_comision:
+        desc_partes.append(f"Comisión: {numero_comision}")
+    if not con_horario:
+        desc_partes.append("Horario no cargado en PsicoNexo — revisar día exacto.")
+    elif horario:
+        desc_partes.append(f"Duración estimada: {DURACION_CLASE_ICS_HORAS}hs (no se guarda hora de fin en PsicoNexo)")
+    if link:
+        desc_partes.append(f"Link: {link}")
+
+    if desc_partes:
+        lines.append(f"DESCRIPTION:{_escape_ical(chr(10).join(desc_partes))}")
+    if link and (link.startswith("http://") or link.startswith("https://")):
+        lines.append(f"URL:{link}")
+
+    lines.append("END:VEVENT")
+    lines.append("END:VCALENDAR")
+
+    contenido = "\r\n".join(lines) + "\r\n"
+    return contenido.encode("utf-8")
+
 
 def normalizar_horario(texto):
     """
@@ -268,11 +391,6 @@ def cambiar_comision(usuario_id, materia_id, fecha_cambio, nuevo_numero, nuevo_t
     get_todas_cursadas.clear()
     get_clases_hoy.clear()
     get_historial_comisiones.clear()
-    # Invalida también la caché de get_periodos_comision (07/08/2026): al
-    # cerrar el período vigente y abrir uno nuevo, la lista de períodos de
-    # esta cursada cambia, así que hay que descartar lo que haya quedado
-    # cacheado bajo la fecha_desde_comision anterior.
-    get_periodos_comision.clear()
     return True, f"Comisión actualizada a {nuevo_numero}."
 
 def borrar_cursada(usuario_id, materia_id):
@@ -721,6 +839,28 @@ def mostrar(usuario):
                                     st.markdown(f"📧 {email_prof2}")
                         if link:
                             st.markdown(f"[🔗 Acceder a la clase]({link})")
+
+                        # ── Exportar cursada a .ics (ítem prioridad media-alta,
+                        # 07/08/2026) — requiere días cargados y fechas del
+                        # cuatrimestre configuradas en Home; si falta algo, se
+                        # omite el botón en silencio (mismo criterio que el
+                        # resto de las funciones de asistencia de esta página).
+                        config_cuatri_ics = get_config_cuatrimestre_materia(usuario["id"], anio, cuatri)
+                        if config_cuatri_ics and dias:
+                            fecha_ini_ics, fecha_fin_ics = config_cuatri_ics
+                            ics_bytes = generar_ics_cursada(
+                                mnombre, dias, horario, fecha_ini_ics, fecha_fin_ics, modalidad, link,
+                                prof1, prof2, numero_comision, uid_seed=f"cursada-{cid}"
+                            )
+                            if ics_bytes:
+                                st.download_button(
+                                    label="📅 Exportar a calendario (.ics)",
+                                    data=ics_bytes,
+                                    file_name=f"{mnombre.replace(' ', '_')}.ics",
+                                    mime="text/calendar",
+                                    key=f"ics_{mid}",
+                                    use_container_width=True
+                                )
 
                         # ── Fechas de parciales y final ───────────────────
                         st.markdown("**📆 Fechas de evaluación:**")

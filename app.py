@@ -1,5 +1,5 @@
 import streamlit as st
-from db import init_db, crear_admin_si_no_existe
+from db import init_db, crear_admin_si_no_existe, get_uso_almacenamiento, NEON_STORAGE_LIMIT_BYTES
 from auth import login_user, register_user, logout, get_carreras, generar_codigo, get_codigos
 import calendar
 from datetime import datetime
@@ -104,6 +104,50 @@ def mostrar_admin():
             st.markdown(f"**{c[0]}** — {estado}{usado_por}")
     else:
         st.info("No hay códigos generados todavía.")
+
+    # ── Uso de almacenamiento (Neon) ─────────────────────────────────────
+    # Barra de % de espacio ocupado en la base de datos, contra el límite
+    # del plan contratado en Neon (NEON_STORAGE_LIMIT_BYTES en db.py — hoy
+    # configurado para el plan Free, 0.5 GB). Ítem nuevo, 08/08/2026.
+    st.markdown("---")
+    st.markdown("### 📦 Uso de almacenamiento (Neon)")
+
+    bytes_usados = get_uso_almacenamiento()
+    limite_bytes = NEON_STORAGE_LIMIT_BYTES
+    porcentaje_uso = round((bytes_usados / limite_bytes) * 100, 1) if limite_bytes else 0
+    mb_usados = bytes_usados / (1024 * 1024)
+    mb_limite = limite_bytes / (1024 * 1024)
+
+    if porcentaje_uso < 75:
+        color_uso = "#2ecc71"
+    elif porcentaje_uso < 90:
+        color_uso = "#f39c12"
+    else:
+        color_uso = "#e74c3c"
+
+    ancho_barra = min(porcentaje_uso, 100)
+
+    st.markdown(f"""
+        <div style="margin-top:8px; margin-bottom:4px;">
+            <div style="display:flex; justify-content:space-between; align-items:baseline; margin-bottom:6px;">
+                <span style="font-size:14px; color:#ccc;">
+                    Usado: <strong style="color:{color_uso};">{porcentaje_uso}%</strong> de 100%
+                </span>
+                <span style="font-size:12px; color:#888;">
+                    {mb_usados:.1f} MB / {mb_limite:.0f} MB
+                </span>
+            </div>
+            <div style="background:#2a2a3e; border-radius:8px; height:16px; overflow:hidden;">
+                <div style="width:{ancho_barra}%; background:{color_uso}; height:16px; border-radius:8px;
+                            transition:width 0.3s ease;"></div>
+            </div>
+        </div>
+    """, unsafe_allow_html=True)
+
+    if porcentaje_uso >= 90:
+        st.error("🚨 Estás muy cerca del límite de almacenamiento del plan de Neon.")
+    elif porcentaje_uso >= 75:
+        st.warning("⚠️ El uso de almacenamiento está creciendo. Contemplá optimizar datos o upgradear el plan.")
 
 def mostrar_sidebar(usuario):
     with st.sidebar:

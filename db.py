@@ -1,5 +1,9 @@
 import os
+import csv
+import zipfile
+from io import BytesIO, StringIO
 import psycopg
+from psycopg import sql as pgsql
 from psycopg_pool import ConnectionPool
 import bcrypt
 from dotenv import load_dotenv
@@ -500,3 +504,106 @@ def get_uso_almacenamiento():
         with conn.cursor() as cur:
             cur.execute("SELECT pg_database_size(current_database());")
             return cur.fetchone()[0]
+
+# ─── Backup de la base de datos (ítem prioridad alta, 09/08/2026) ──────────
+# Dos formatos, ambos generados en Python puro (sin pg_dump, que no está
+# garantizado en Streamlit Community Cloud):
+#   - SQL: un .sql con INSERTs, restaurable ejecutándolo contra una base con
+#     el esquema ya creado (init_db() lo crea solo).
+#   - CSV: un .zip con un .csv por tabla, para inspeccionar en Excel/Sheets.
+# Las dos funciones abren UNA sola conexión y recorren todas las tablas ahí
+# adentro (mismo criterio que el resto del proyecto: en Neon serverless el
+# costo real es el round-trip de adquirir la conexión, no las queries en sí).
+#
+# TABLAS_BACKUP está en orden de dependencias (tablas padre antes que hijas)
+# para que el .sql se pueda ejecutar de arriba a abajo sin violar foreign
+# keys. Se arma a mano en vez de vía introspección del catálogo de Postgres
+# para no depender de que el esquema no tenga tablas ajenas al proyecto.
+TABLAS_BACKUP = [
+    "carreras",
+    "usuarios",
+    "materias",
+    "correlatividades",
+    "alumno_materias",
+    "codigos_invitacion",
+    "recursos",
+    "cursadas",
+    "comisiones_historial",
+    "evaluaciones",
+    "tareas",
+    "asistencias",
+    "opiniones_profesores",
+    "recomendaciones_terceros",
+    "recomendaciones_terceros_materias",
+    "programas",
+    "configuracion_cuatrimestre",
+    "feriados",
+    "intentos_login",
+]
+
+def _fila_a_insert(tabla, columnas, fila, conn):
+    """
+    Arma un INSERT INTO ... VALUES (...) para una fila, escapando los
+    valores de forma segura con psycopg.sql (misma librería que usa el
+    resto del proyecto), sin depender de mogrify ni de armar el escapeo
+    a mano.
+    """
+    columnas_sql = pgsql.SQL(", ").join(pgsql.Identifier(c) for c in columnas)
+    valores_sql = pgsql.SQL(", ").join(pgsql.Literal(v) for v in fila)
+    stmt = pgsql.SQL("INSERT INTO {} ({}) VALUES ({});").format(
+        pgsql.Identifier(tabla), columnas_sql, valores_sql
+    )
+    return stmt.as_string(conn)
+
+def generar_backup_sql():
+    """
+    Devuelve bytes de un .sql con un INSERT por fila de cada tabla en
+    TABLAS_BACKUP, envuelto en una transacción (BEGIN/COMMIT). Para
+    restaurar: crear una base nueva, correr init_db() (esto recrea el
+    esquema vacío) y después ejecutar este .sql contra esa base.
+    """
+    lineas = [
+        "-- PsicoNexo — Backup de base de datos",
+        f"-- Generado: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+        "-- Generado en Python con psycopg (no requiere pg_dump).",
+        "-- Para restaurar: correr init_db() contra una base vacía y después este archivo.",
+        "",
+        "BEGIN;",
+        "",
+    ]
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            for tabla in TABLAS_BACKUP:
+                cur.execute(pgsql.SQL("SELECT * FROM {};").format(pgsql.Identifier(tabla)))
+                columnas = [desc[0] for desc in cur.description]
+                filas = cur.fetchall()
+                lineas.append(f"-- Tabla: {tabla} ({len(filas)} filas)")
+                for fila in filas:
+                    lineas.append(_fila_a_insert(tabla, columnas, fila, conn))
+                lineas.append("")
+    lineas.append("COMMIT;")
+    contenido = "\n".join(lineas)
+    return contenido.encode("utf-8")
+
+def generar_backup_csv_zip():
+    """
+    Devuelve bytes de un .zip con un archivo <tabla>.csv por cada tabla en
+    TABLAS_BACKUP (encabezado con nombres de columna + todas las filas).
+    Pensado para inspección en Excel/Sheets, no para restaurar directamente.
+    """
+    buffer_zip = BytesIO()
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            with zipfile.ZipFile(buffer_zip, "w", zipfile.ZIP_DEFLATED) as zf:
+                for tabla in TABLAS_BACKUP:
+                    cur.execute(pgsql.SQL("SELECT * FROM {};").format(pgsql.Identifier(tabla)))
+                    columnas = [desc[0] for desc in cur.description]
+                    filas = cur.fetchall()
+
+                    csv_buffer = StringIO()
+                    writer = csv.writer(csv_buffer)
+                    writer.writerow(columnas)
+                    writer.writerows(filas)
+                    zf.writestr(f"{tabla}.csv", csv_buffer.getvalue())
+    buffer_zip.seek(0)
+    return buffer_zip.getvalue()

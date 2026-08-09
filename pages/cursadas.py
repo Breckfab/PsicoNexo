@@ -3,7 +3,7 @@ from db import get_conn, get_feriados, get_clases_hoy, get_historial_comisiones,
 from datetime import datetime, date, timedelta
 import re
 from utils import NOMBRES_ANIO, DIA_INDEX, contar_clases_en_rango, contar_clases_multi_periodo, clasificar_asistencia, convertir_link_preview
-from pages.estadisticas import calcular_historial_asistencia, generar_pdf_asistencia, get_nombre_usuario
+from pages.estadisticas import calcular_historial_asistencia, generar_pdf_asistencia
 
 MODALIDADES = ["Presencial", "Híbrida", "Asincrónica"]
 TURNOS = ["Mañana", "Tarde", "Noche"]
@@ -266,6 +266,123 @@ def get_tareas_materia(usuario_id, materia_id):
             """, (usuario_id, materia_id))
             return cur.fetchall()
 
+# ─── Batch de datos para la tab "Cursando actualmente" (ítem prioridad alta,
+# "Consolidar queries de la tab Cursando actualmente", 08/08/2026) ─────────
+# Antes esta tab abría 6 conexiones fijas (materias cursando, todas las
+# cursadas, programas, feriados, nombre del alumno) MÁS 2 conexiones nuevas
+# POR CADA MATERIA cursando (get_faltas_materia y get_historial_comisiones,
+# porque ambas reciben un id que cambia en cada iteración del loop y no
+# pueden compartir el cache entre materias distintas). Con 3-4 materias
+# cursando eso ya eran 12-14 round-trips reales por carga de pantalla.
+#
+# Acá se resuelve todo en una sola conexión: las faltas de TODAS las
+# materias se traen con un solo GROUP BY (mismo patrón que
+# get_faltas_por_materia en home.py) y el historial de comisiones de TODAS
+# las cursadas del alumno se trae con un solo WHERE cursada_id = ANY(%s),
+# en vez de una query por cursada. Se agrupan en Python con dicts
+# {materia_id: [...]} / {cursada_id: [...]} para que el resto del código
+# los consuma exactamente igual que antes.
+#
+# IMPORTANTE: no reemplaza a get_faltas_materia ni a get_historial_comisiones
+# (siguen usándose tal cual en los formularios de editar/borrar falta y
+# cambiar comisión, para no romper esos flujos), solo evita llamarlas
+# dentro del loop de materias de la tab1.
+
+@st.cache_data(ttl=60)
+def get_cursadas_tab_data(usuario_id, carrera_id):
+    """
+    Devuelve, en una sola conexión:
+    (materias_cursando, todas_cursadas, todos_programas, feriados_rows,
+     nombre_alumno, faltas_por_materia, historial_por_cursada)
+    - materias_cursando: [(id, nombre, anio), ...]
+    - todas_cursadas: {materia_id: (id, anio_cursada, cuatrimestre, ...)} — mismo
+      formato que devuelve get_todas_cursadas().
+    - todos_programas: {materia_id: link}
+    - feriados_rows: [(id, fecha, descripcion), ...] — mismo formato que get_feriados()
+    - nombre_alumno: str
+    - faltas_por_materia: {materia_id: [(id, fecha, justificada), ...]} — mismo
+      formato de fila que devuelve get_faltas_materia() para cada materia.
+    - historial_por_cursada: {cursada_id: [(id, numero_comision, turno, dias,
+      horario, link, profesor1, email1, profesor2, email2, fecha_desde,
+      fecha_hasta), ...]} — mismo formato de fila que get_historial_comisiones().
+    """
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT m.id, m.nombre, m.anio
+                FROM materias m
+                JOIN alumno_materias am ON m.id = am.materia_id
+                WHERE am.usuario_id = %s AND am.estado = 'cursando'
+                AND m.carrera_id = %s
+                ORDER BY m.anio, m.nombre;
+            """, (usuario_id, carrera_id))
+            materias_cursando = cur.fetchall()
+
+            cur.execute("""
+                SELECT materia_id, id, anio_cursada, cuatrimestre, modalidad, dias, horario, link,
+                       profesor1, email_profesor1, profesor2, email_profesor2, turno,
+                       fecha_parcial1, fecha_parcial2, fecha_final,
+                       numero_comision, fecha_desde_comision
+                FROM cursadas
+                WHERE usuario_id = %s
+                ORDER BY anio_cursada DESC, id DESC;
+            """, (usuario_id,))
+            cursadas_rows = cur.fetchall()
+
+            cur.execute("SELECT materia_id, link FROM programas WHERE usuario_id = %s;", (usuario_id,))
+            todos_programas = {row[0]: row[1] for row in cur.fetchall()}
+
+            cur.execute("""
+                SELECT id, fecha, descripcion
+                FROM feriados
+                WHERE usuario_id = %s
+                ORDER BY fecha;
+            """, (usuario_id,))
+            feriados_rows = cur.fetchall()
+
+            cur.execute("SELECT nombre FROM usuarios WHERE id = %s;", (usuario_id,))
+            row_nombre = cur.fetchone()
+            nombre_alumno = row_nombre[0] if row_nombre else "Alumno"
+
+            cur.execute("""
+                SELECT materia_id, id, fecha, justificada
+                FROM asistencias
+                WHERE usuario_id = %s
+                ORDER BY fecha DESC;
+            """, (usuario_id,))
+            faltas_rows = cur.fetchall()
+
+            cursada_ids = [row[1] for row in cursadas_rows]
+            historial_rows = []
+            if cursada_ids:
+                cur.execute("""
+                    SELECT cursada_id, id, numero_comision, turno, dias, horario, link,
+                           profesor1, email_profesor1, profesor2, email_profesor2,
+                           fecha_desde, fecha_hasta
+                    FROM comisiones_historial
+                    WHERE cursada_id = ANY(%s)
+                    ORDER BY fecha_desde;
+                """, (cursada_ids,))
+                historial_rows = cur.fetchall()
+
+    todas_cursadas = {}
+    for row in cursadas_rows:
+        mid = row[0]
+        if mid not in todas_cursadas:
+            todas_cursadas[mid] = row[1:]
+
+    faltas_por_materia = {}
+    for mat_id, fid, ffecha, fjust in faltas_rows:
+        faltas_por_materia.setdefault(mat_id, []).append((fid, ffecha, fjust))
+
+    historial_por_cursada = {}
+    for row in historial_rows:
+        cid = row[0]
+        historial_por_cursada.setdefault(cid, []).append(row[1:])
+
+    return (materias_cursando, todas_cursadas, todos_programas, feriados_rows,
+            nombre_alumno, faltas_por_materia, historial_por_cursada)
+
 # ─── Materias aprobadas / promocionadas ─────────────────────────────────────
 # Se usan en la tab "✅ Materias aprobadas" (ítem de prioridad máxima,
 # 27/07/2026). Se separan en dos queries chicas en vez de un JOIN grande con
@@ -336,6 +453,7 @@ def guardar_cursada(usuario_id, materia_id, anio, cuatrimestre, modalidad, turno
         conn.commit()
     get_todas_cursadas.clear()
     get_clases_hoy.clear()
+    get_cursadas_tab_data.clear()
 
 def cambiar_comision(usuario_id, materia_id, fecha_cambio, nuevo_numero, nuevo_turno, nuevos_dias,
                       nuevo_horario, nuevo_link, nuevo_prof1, nuevo_email_prof1, nuevo_prof2, nuevo_email_prof2):
@@ -391,6 +509,7 @@ def cambiar_comision(usuario_id, materia_id, fecha_cambio, nuevo_numero, nuevo_t
     get_todas_cursadas.clear()
     get_clases_hoy.clear()
     get_historial_comisiones.clear()
+    get_cursadas_tab_data.clear()
     return True, f"Comisión actualizada a {nuevo_numero}."
 
 def borrar_cursada(usuario_id, materia_id):
@@ -400,6 +519,7 @@ def borrar_cursada(usuario_id, materia_id):
         conn.commit()
     get_todas_cursadas.clear()
     get_clases_hoy.clear()
+    get_cursadas_tab_data.clear()
 
 def borrar_cursada_especifica(usuario_id, materia_id, anio_cursada, cuatrimestre):
     """Borra únicamente la cursada puntual (año + cuatrimestre) indicada, sin
@@ -420,6 +540,7 @@ def borrar_cursada_especifica(usuario_id, materia_id, anio_cursada, cuatrimestre
         conn.commit()
     get_todas_cursadas.clear()
     get_clases_hoy.clear()
+    get_cursadas_tab_data.clear()
 
 def guardar_tarea(usuario_id, materia_id, numero, descripcion, fecha_vencimiento):
     with get_conn() as conn:
@@ -484,6 +605,7 @@ def agregar_falta(usuario_id, materia_id, fecha, justificada=False):
             """, (usuario_id, materia_id, fecha, justificada))
         conn.commit()
     get_faltas_materia.clear()
+    get_cursadas_tab_data.clear()
 
 def borrar_falta(falta_id):
     with get_conn() as conn:
@@ -491,6 +613,7 @@ def borrar_falta(falta_id):
             cur.execute("DELETE FROM asistencias WHERE id = %s;", (falta_id,))
         conn.commit()
     get_faltas_materia.clear()
+    get_cursadas_tab_data.clear()
 
 def actualizar_falta(falta_id, fecha, justificada):
     with get_conn() as conn:
@@ -501,9 +624,21 @@ def actualizar_falta(falta_id, fecha, justificada):
             """, (fecha, justificada, falta_id))
         conn.commit()
     get_faltas_materia.clear()
+    get_cursadas_tab_data.clear()
 
 def calcular_asistencia(usuario_id, materia_id, dias_str, anio_cursada, cuatrimestre, feriados=None,
-                         cursada_id=None, fecha_desde_comision=None):
+                         cursada_id=None, fecha_desde_comision=None,
+                         historial_comisiones=None, faltas_detalle=None):
+    """
+    `historial_comisiones` y `faltas_detalle`, si se pasan, evitan que esta
+    función tenga que abrir conexiones nuevas por su cuenta (get_periodos_comision
+    → get_historial_comisiones, y get_faltas_materia): la tab "Cursando
+    actualmente" ya trae todo eso precargado en un solo batch
+    (get_cursadas_tab_data, 08/08/2026) y lo pasa acá directamente. Si no se
+    pasan (por ejemplo, otro llamador futuro que no tenga los datos
+    precargados), se comporta exactamente igual que antes, yendo a buscarlos
+    a la base bajo demanda.
+    """
     config = get_config_cuatrimestre_materia(usuario_id, anio_cursada, cuatrimestre)
     if not config:
         return None
@@ -513,14 +648,18 @@ def calcular_asistencia(usuario_id, materia_id, dias_str, anio_cursada, cuatrime
     # sumamos clases por tramo (uno por cada comisión por la que pasó el
     # alumno), en vez de aplicar los días actuales a todo el cuatrimestre.
     if cursada_id and fecha_desde_comision:
-        periodos = get_periodos_comision(cursada_id, dias_str, fecha_desde_comision)
+        if historial_comisiones is not None:
+            periodos = [(h[3], h[10], h[11]) for h in historial_comisiones]
+            periodos.append((dias_str, fecha_desde_comision, None))
+        else:
+            periodos = get_periodos_comision(cursada_id, dias_str, fecha_desde_comision)
         clases_totales = contar_clases_multi_periodo(periodos, fecha_inicio, fecha_fin, feriados)
     else:
         clases_totales = contar_clases_en_rango(dias_str, fecha_inicio, fecha_fin, feriados)
 
     if clases_totales == 0:
         return None
-    faltas = get_faltas_materia(usuario_id, materia_id)
+    faltas = faltas_detalle if faltas_detalle is not None else get_faltas_materia(usuario_id, materia_id)
     cantidad_faltas = len(faltas)
     porcentaje = round(((clases_totales - cantidad_faltas) / clases_totales) * 100, 1)
     max_faltas_permitidas = int(clases_totales * 0.25)
@@ -534,7 +673,14 @@ def calcular_asistencia(usuario_id, materia_id, dias_str, anio_cursada, cuatrime
         "detalle_faltas": faltas,
     }
 
-def mostrar_asistencia(usuario, mid, dias, anio, cuatri, cursada_id=None, fecha_desde_comision=None):
+def mostrar_asistencia(usuario, mid, dias, anio, cuatri, cursada_id=None, fecha_desde_comision=None,
+                        feriados_set=None, faltas_detalle=None, historial_comisiones=None):
+    """
+    `feriados_set`, `faltas_detalle` y `historial_comisiones` son opcionales:
+    si el llamador ya los tiene precargados (batch get_cursadas_tab_data de
+    la tab1, 08/08/2026) se los pasa acá y esta función no vuelve a pedirlos
+    a la base. Si no se pasan, se comporta igual que antes.
+    """
     st.markdown("---")
     st.markdown("#### 📅 Asistencia")
 
@@ -547,12 +693,17 @@ def mostrar_asistencia(usuario, mid, dias, anio, cuatri, cursada_id=None, fecha_
         )
         return
 
-    feriados_set = {f[1] for f in get_feriados(usuario["id"])}
+    if feriados_set is None:
+        feriados_set = {f[1] for f in get_feriados(usuario["id"])}
 
     fecha_inicio, fecha_fin = config
 
     if cursada_id and fecha_desde_comision:
-        periodos = get_periodos_comision(cursada_id, dias, fecha_desde_comision)
+        if historial_comisiones is not None:
+            periodos = [(h[3], h[10], h[11]) for h in historial_comisiones]
+            periodos.append((dias, fecha_desde_comision, None))
+        else:
+            periodos = get_periodos_comision(cursada_id, dias, fecha_desde_comision)
         clases_totales = contar_clases_multi_periodo(periodos, fecha_inicio, fecha_fin, feriados_set)
     else:
         clases_totales = contar_clases_en_rango(dias, fecha_inicio, fecha_fin, feriados_set)
@@ -565,7 +716,8 @@ def mostrar_asistencia(usuario, mid, dias, anio, cuatri, cursada_id=None, fecha_
         )
         return
 
-    stats = calcular_asistencia(usuario["id"], mid, dias, anio, cuatri, feriados_set, cursada_id, fecha_desde_comision)
+    stats = calcular_asistencia(usuario["id"], mid, dias, anio, cuatri, feriados_set, cursada_id, fecha_desde_comision,
+                                 historial_comisiones=historial_comisiones, faltas_detalle=faltas_detalle)
     porcentaje = stats["porcentaje"]
     color, negrita = clasificar_asistencia(porcentaje)
     peso = "bold" if negrita else "normal"
@@ -670,10 +822,13 @@ def mostrar_asistencia(usuario, mid, dias, anio, cuatri, cursada_id=None, fecha_
             st.caption("No hay faltas registradas todavía. Por defecto se asume presente en todas las clases.")
 
 def mostrar_gestion_comision(usuario, mid, cid, numero_comision, fecha_desde_comision, turno, dias, horario, link,
-                              prof1, email_prof1, prof2, email_prof2):
+                              prof1, email_prof1, prof2, email_prof2, historial_comisiones=None):
     """
     Panel de comisión actual + formulario de cambio de comisión + historial
     de comisiones anteriores (ítem #6 de "Cosas por Hacer", 02/08/2026).
+    `historial_comisiones`, si se pasa (batch get_cursadas_tab_data de la
+    tab1, 08/08/2026), evita una consulta nueva a get_historial_comisiones
+    por cada materia.
     """
     st.markdown("---")
     col_com1, col_com2 = st.columns([3, 1])
@@ -746,7 +901,7 @@ def mostrar_gestion_comision(usuario, mid, cid, numero_comision, fecha_desde_com
             st.session_state[cc_key] += 1
             st.rerun()
 
-    historial_com = get_historial_comisiones(cid)
+    historial_com = historial_comisiones if historial_comisiones is not None else get_historial_comisiones(cid)
     if historial_com:
         with st.expander(f"📜 Historial de comisiones ({len(historial_com)})"):
             for hc in historial_com:
@@ -784,9 +939,17 @@ def mostrar(usuario):
     ])
 
     with tab1:
-        materias_cursando = get_materias_cursando(usuario["id"], usuario["carrera_id"])
-        todas_cursadas = get_todas_cursadas(usuario["id"])
-        todos_programas = get_todos_programas_cursada(usuario["id"])
+        # ── Batch único de la tab (ítem prioridad alta, 08/08/2026) ────────
+        # Antes: 6 conexiones fijas + 2 por cada materia cursando. Ahora: 1
+        # sola conexión acá (get_cursadas_tab_data) + la que ya usa
+        # calcular_historial_asistencia (batch compartido con Estadísticas,
+        # ya consolidado en una sesión anterior), sin importar cuántas
+        # materias curse el alumno.
+        (materias_cursando, todas_cursadas, todos_programas, feriados_rows,
+         nombre_alumno_tab1, faltas_por_materia, historial_por_cursada) = get_cursadas_tab_data(
+            usuario["id"], usuario["carrera_id"]
+        )
+        feriados_set_tab1 = {f[1] for f in feriados_rows}
 
         # ── Exportar asistencia a PDF (ítem de prioridad media-alta, 05/08/2026) ──
         # Se calcula una sola vez acá y se reutiliza tanto para el botón
@@ -798,8 +961,7 @@ def mostrar(usuario):
             st.info("No tenés materias marcadas como 'cursando'. Cambiá el estado en Plan de Estudios.")
         else:
             if historial_asistencia:
-                nombre_alumno_pdf = get_nombre_usuario(usuario["id"])
-                pdf_general = generar_pdf_asistencia(historial_asistencia, nombre_alumno_pdf)
+                pdf_general = generar_pdf_asistencia(historial_asistencia, nombre_alumno_tab1)
                 st.download_button(
                     label="⬇️ Descargar PDF de asistencia (todas las materias)",
                     data=pdf_general,
@@ -820,6 +982,10 @@ def mostrar(usuario):
                         (cid, anio, cuatri, modalidad, dias, horario, link, prof1, email_prof1, prof2,
                          email_prof2, turno, fecha_parcial1, fecha_parcial2, fecha_final,
                          numero_comision, fecha_desde_comision) = cursada
+
+                        historial_cursada_mid = historial_por_cursada.get(cid, [])
+                        faltas_mid = faltas_por_materia.get(mid, [])
+
                         col1, col2 = st.columns(2)
                         with col1:
                             st.markdown(f"**Año:** {anio}")
@@ -887,7 +1053,11 @@ def mostrar(usuario):
                                 st.components.v1.iframe(convertir_link_preview(programa_link), height=500)
 
                         # ── Sección de asistencia ─────────────────────────
-                        mostrar_asistencia(usuario, mid, dias, anio, cuatri, cid, fecha_desde_comision)
+                        mostrar_asistencia(
+                            usuario, mid, dias, anio, cuatri, cid, fecha_desde_comision,
+                            feriados_set=feriados_set_tab1, faltas_detalle=faltas_mid,
+                            historial_comisiones=historial_cursada_mid
+                        )
 
                         # ── Exportar a PDF la asistencia de esta materia ──
                         # Reutiliza historial_asistencia (calculado una sola
@@ -896,8 +1066,7 @@ def mostrar(usuario):
                         # de una vez (varias filas para la misma materia).
                         datos_materia = [d for d in historial_asistencia if d["materia"] == mnombre]
                         if datos_materia:
-                            nombre_alumno_pdf = get_nombre_usuario(usuario["id"])
-                            pdf_materia = generar_pdf_asistencia(datos_materia, nombre_alumno_pdf, filtro_materia=mnombre)
+                            pdf_materia = generar_pdf_asistencia(datos_materia, nombre_alumno_tab1, filtro_materia=mnombre)
                             st.download_button(
                                 label="⬇️ Descargar PDF de asistencia de esta materia",
                                 data=pdf_materia,
@@ -910,7 +1079,7 @@ def mostrar(usuario):
                         # ── Comisión: panel + cambio + historial ──────────
                         mostrar_gestion_comision(
                             usuario, mid, cid, numero_comision, fecha_desde_comision, turno, dias, horario, link,
-                            prof1, email_prof1, prof2, email_prof2
+                            prof1, email_prof1, prof2, email_prof2, historial_comisiones=historial_cursada_mid
                         )
 
                         st.markdown("---")

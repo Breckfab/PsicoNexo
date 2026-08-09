@@ -1,5 +1,8 @@
 import streamlit as st
-from db import init_db, crear_admin_si_no_existe, get_uso_almacenamiento, NEON_STORAGE_LIMIT_BYTES
+from db import (
+    init_db, crear_admin_si_no_existe, get_uso_almacenamiento, NEON_STORAGE_LIMIT_BYTES,
+    generar_backup_sql, generar_backup_csv_zip,
+)
 from auth import login_user, register_user, logout, get_carreras, generar_codigo, get_codigos
 import calendar
 from datetime import datetime
@@ -148,6 +151,53 @@ def mostrar_admin():
         st.error("🚨 Estás muy cerca del límite de almacenamiento del plan de Neon.")
     elif porcentaje_uso >= 75:
         st.warning("⚠️ El uso de almacenamiento está creciendo. Contemplá optimizar datos o upgradear el plan.")
+
+    # ── Backup de la base de datos (ítem prioridad alta, 09/08/2026) ──────
+    # Dos formatos: SQL (INSERTs, restaurable ejecutándolo contra una base
+    # con el esquema ya creado por init_db()) y CSV (.zip con un .csv por
+    # tabla, para inspeccionar en Excel/Sheets). No se generan solos en cada
+    # carga de la pantalla: el botón "Generar" dispara la consulta bajo
+    # demanda (1 sola conexión, todas las tablas adentro) y guarda el
+    # resultado en session_state; recién ahí aparece el botón de descarga.
+    st.markdown("---")
+    st.markdown("### 💾 Backup de la base de datos")
+    st.caption(
+        "El backup **SQL** trae un INSERT por fila y se puede restaurar ejecutándolo contra "
+        "una base con el esquema ya creado (correr la app una vez alcanza, `init_db()` lo crea solo). "
+        "El backup **CSV** trae un .zip con un archivo por tabla, para revisar los datos en Excel/Sheets."
+    )
+
+    col_bk1, col_bk2 = st.columns(2)
+
+    with col_bk1:
+        if st.button("🗄️ Generar backup SQL", use_container_width=True):
+            with st.spinner("Generando backup SQL..."):
+                st.session_state["backup_sql_bytes"] = generar_backup_sql()
+            st.rerun()
+        if "backup_sql_bytes" in st.session_state:
+            st.download_button(
+                label="⬇️ Descargar backup.sql",
+                data=st.session_state["backup_sql_bytes"],
+                file_name=f"psiconexo_backup_{datetime.now().strftime('%Y%m%d_%H%M')}.sql",
+                mime="application/sql",
+                key="dl_backup_sql",
+                use_container_width=True,
+            )
+
+    with col_bk2:
+        if st.button("📦 Generar backup CSV (.zip)", use_container_width=True):
+            with st.spinner("Generando backup CSV..."):
+                st.session_state["backup_csv_bytes"] = generar_backup_csv_zip()
+            st.rerun()
+        if "backup_csv_bytes" in st.session_state:
+            st.download_button(
+                label="⬇️ Descargar backup.zip",
+                data=st.session_state["backup_csv_bytes"],
+                file_name=f"psiconexo_backup_{datetime.now().strftime('%Y%m%d_%H%M')}.zip",
+                mime="application/zip",
+                key="dl_backup_csv",
+                use_container_width=True,
+            )
 
 def mostrar_sidebar(usuario):
     with st.sidebar:

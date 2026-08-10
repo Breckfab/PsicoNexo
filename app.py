@@ -159,6 +159,10 @@ def mostrar_admin():
     # carga de la pantalla: el botón "Generar" dispara la consulta bajo
     # demanda (1 sola conexión, todas las tablas adentro) y guarda el
     # resultado en session_state; recién ahí aparece el botón de descarga.
+    # NOTA: el botón de acceso rápido del sidebar (ver mostrar_backup_sidebar
+    # más abajo) usa la misma clave de session_state "backup_sql_bytes",
+    # así que un backup generado desde acá también deja el botón de
+    # descarga disponible en el sidebar, y viceversa.
     st.markdown("---")
     st.markdown("### 💾 Backup de la base de datos")
     st.caption(
@@ -198,6 +202,60 @@ def mostrar_admin():
                 key="dl_backup_csv",
                 use_container_width=True,
             )
+
+def mostrar_backup_sidebar(usuario):
+    """
+    Acceso rápido al backup SQL desde el sidebar (ítem #2 de
+    PSICO_Mejoras_Pendientes_v2.md, 09/08/2026), para no tener que ir hasta
+    Administración cada vez. Solo visible para es_admin, mismo criterio que
+    el resto del panel de Administración.
+
+    Reutiliza generar_backup_sql() de db.py (sin duplicar lógica) y la
+    misma clave de session_state "backup_sql_bytes" que usa el botón de
+    Administración, así que generar el backup desde cualquiera de los dos
+    lugares deja el botón de descarga disponible en ambos.
+
+    Color: ámbar (#D97706), la opción de "acción de mantenimiento" — para
+    diferenciarlo a simple vista del resto de los botones del sidebar
+    (tema oscuro, calendario, cerrar sesión), que usan el estilo por
+    defecto de Streamlit. El color se aplica con un ancla invisible +
+    selector CSS de hermano adyacente, ya que Streamlit no expone una key
+    directamente como clase CSS del botón.
+    """
+    if not usuario.get("es_admin"):
+        return
+
+    st.markdown("---")
+    st.markdown('<div id="backup-sidebar-anchor"></div>', unsafe_allow_html=True)
+    st.markdown("""
+        <style>
+        #backup-sidebar-anchor + div button {
+            background-color: #D97706 !important;
+            border-color: #D97706 !important;
+            color: white !important;
+        }
+        #backup-sidebar-anchor + div button:hover {
+            background-color: #B45309 !important;
+            border-color: #B45309 !important;
+            color: white !important;
+        }
+        </style>
+    """, unsafe_allow_html=True)
+
+    if st.button("💾 Backup rápido", use_container_width=True, key="btn_backup_sidebar"):
+        with st.spinner("Generando backup..."):
+            st.session_state["backup_sql_bytes"] = generar_backup_sql()
+        st.rerun()
+
+    if "backup_sql_bytes" in st.session_state:
+        st.download_button(
+            label="⬇️ Descargar backup.sql",
+            data=st.session_state["backup_sql_bytes"],
+            file_name=f"psiconexo_backup_{datetime.now().strftime('%Y%m%d_%H%M')}.sql",
+            mime="application/sql",
+            key="dl_backup_sql_sidebar",
+            use_container_width=True,
+        )
 
 def mostrar_sidebar(usuario):
     with st.sidebar:
@@ -280,6 +338,10 @@ def mostrar_sidebar(usuario):
         if st.button("🚪 Cerrar sesión", use_container_width=True):
             logout()
             st.rerun()
+
+        # ── Backup rápido (ítem #2, 09/08/2026) — debajo de "Cerrar sesión",
+        # solo para es_admin. Ver mostrar_backup_sidebar() para el detalle.
+        mostrar_backup_sidebar(usuario)
 
 def mostrar_navbar(usuario):
     st.markdown("""

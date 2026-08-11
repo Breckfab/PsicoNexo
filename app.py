@@ -1,7 +1,7 @@
 import streamlit as st
 from db import (
     init_db, crear_admin_si_no_existe, get_uso_almacenamiento, NEON_STORAGE_LIMIT_BYTES,
-    generar_backup_sql, generar_backup_csv_zip,
+    generar_backup_sql, generar_backup_csv_zip, restaurar_backup_sql,
 )
 from auth import login_user, register_user, logout, get_carreras, generar_codigo, get_codigos
 import calendar
@@ -202,6 +202,83 @@ def mostrar_admin():
                 key="dl_backup_csv",
                 use_container_width=True,
             )
+
+    # ── Restaurar backup (ítem prioridad alta, 10/08/2026) ────────────────
+    # Decisiones de diseño (ver comentarios en restaurar_backup_sql(), db.py):
+    # upsert por id (no borra nada salvo modo espejo), fila por fila con
+    # SAVEPOINT (un error puntual no aborta el resto), doble confirmación
+    # antes de ejecutar — mismo patrón que ya se usa para borrar cursadas/
+    # tareas/feriados en el resto del sistema.
+    st.markdown("---")
+    st.markdown("### 📥 Restaurar backup")
+    st.caption(
+        "Subí un .sql generado por los botones de arriba (o el de acceso rápido del "
+        "sidebar). Por cada fila: si el id ya existe en la base, la actualiza con los "
+        "valores del backup; si no existe, la inserta. **No borra nada** que esté en la "
+        "base y no esté en el backup, salvo que actives el modo espejo de abajo."
+    )
+
+    archivo_restore = st.file_uploader(
+        "Archivo .sql de backup", type=["sql"], key="uploader_restore_backup"
+    )
+
+    modo_espejo = st.checkbox(
+        "🗑️ Modo espejo: además, borrar las filas que NO estén en este backup "
+        "(incluye vaciar por completo cualquier tabla que en el backup tenga 0 filas). "
+        "Deja la base exactamente como estaba en el momento en que se generó el backup.",
+        key="chk_modo_espejo_restore",
+    )
+
+    if archivo_restore is not None:
+        if not st.session_state.get("confirmar_restore_backup"):
+            if st.button("♻️ Restaurar backup", use_container_width=True, key="btn_iniciar_restore"):
+                st.session_state["confirmar_restore_backup"] = True
+                st.rerun()
+        else:
+            texto_advertencia = "⚠️ Esto va a modificar la base de datos en vivo."
+            if modo_espejo:
+                texto_advertencia += " Además va a **BORRAR** las filas que no estén en este backup."
+            texto_advertencia += " Esta acción no se puede deshacer. ¿Confirmás?"
+            st.warning(texto_advertencia)
+
+            col_si, col_no = st.columns(2)
+            with col_si:
+                if st.button("✅ Sí, restaurar ahora", use_container_width=True, key="btn_confirmar_restore"):
+                    try:
+                        with st.spinner("Restaurando backup..."):
+                            resultado = restaurar_backup_sql(
+                                archivo_restore.getvalue(), modo_espejo=modo_espejo
+                            )
+                        st.session_state["resultado_restore_backup"] = resultado
+                    except ValueError as e:
+                        st.session_state["resultado_restore_backup"] = None
+                        st.session_state["error_restore_backup"] = str(e)
+                    st.session_state["confirmar_restore_backup"] = False
+                    st.rerun()
+            with col_no:
+                if st.button("❌ Cancelar", use_container_width=True, key="btn_cancelar_restore"):
+                    st.session_state["confirmar_restore_backup"] = False
+                    st.rerun()
+
+    if st.session_state.get("error_restore_backup"):
+        st.error(f"⚠️ {st.session_state['error_restore_backup']}")
+        if st.button("Cerrar", key="cerrar_error_restore"):
+            del st.session_state["error_restore_backup"]
+            st.rerun()
+
+    if st.session_state.get("resultado_restore_backup"):
+        resultado = st.session_state["resultado_restore_backup"]
+        st.success(f"✅ {resultado['ok_total']} fila(s) restauradas correctamente (insertadas o actualizadas).")
+        if resultado["borradas"]:
+            st.info(f"🗑️ {resultado['borradas']} fila(s) borradas por el modo espejo.")
+        if resultado["error_total"]:
+            st.error(f"⚠️ {resultado['error_total']} fila(s) no se pudieron restaurar.")
+            with st.expander("Ver detalle de errores (hasta 50)"):
+                for tabla, id_str, msg in resultado["errores"]:
+                    st.caption(f"**{tabla}** (id {id_str}): {msg}")
+        if st.button("Cerrar resumen", key="cerrar_resumen_restore"):
+            del st.session_state["resultado_restore_backup"]
+            st.rerun()
 
 def mostrar_backup_sidebar(usuario):
     """

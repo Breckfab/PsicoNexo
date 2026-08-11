@@ -215,32 +215,17 @@ def mostrar_backup_sidebar(usuario):
     Administración, así que generar el backup desde cualquiera de los dos
     lugares deja el botón de descarga disponible en ambos.
 
-    Color: ámbar (#D97706), la opción de "acción de mantenimiento" — para
-    diferenciarlo a simple vista del resto de los botones del sidebar
-    (tema oscuro, calendario, cerrar sesión), que usan el estilo por
-    defecto de Streamlit. El color se aplica con un ancla invisible +
-    selector CSS de hermano adyacente, ya que Streamlit no expone una key
-    directamente como clase CSS del botón.
+    Color: el CSS que fuerza el ámbar (#D97706) vive en mostrar_sidebar()
+    (un solo bloque <style> para el botón de acá y el de "Cerrar sesión"),
+    apuntando a la clase ".st-key-btn_backup_sidebar" que Streamlit genera
+    automáticamente a partir del key del botón — ver el comentario en
+    mostrar_sidebar() para el detalle de por qué se cambió de enfoque
+    (10/08/2026, fix de color).
     """
     if not usuario.get("es_admin"):
         return
 
     st.markdown("---")
-    st.markdown('<div id="backup-sidebar-anchor"></div>', unsafe_allow_html=True)
-    st.markdown("""
-        <style>
-        #backup-sidebar-anchor + div button {
-            background-color: #D97706 !important;
-            border-color: #D97706 !important;
-            color: white !important;
-        }
-        #backup-sidebar-anchor + div button:hover {
-            background-color: #B45309 !important;
-            border-color: #B45309 !important;
-            color: white !important;
-        }
-        </style>
-    """, unsafe_allow_html=True)
 
     if st.button("💾 Backup rápido", use_container_width=True, key="btn_backup_sidebar"):
         with st.spinner("Generando backup..."):
@@ -335,7 +320,51 @@ def mostrar_sidebar(usuario):
                     cols[i].markdown(f"<div style='text-align:center; font-size:12px;'>{dia}</div>", unsafe_allow_html=True)
 
         st.markdown("---")
-        if st.button("🚪 Cerrar sesión", use_container_width=True):
+
+        # ── Colores forzados de "Cerrar sesión" y "Backup rápido" (fix
+        # 10/08/2026) ────────────────────────────────────────────────────
+        # Versión anterior: un <div id="..."> invisible + selector CSS de
+        # hermano adyacente ("#ancla + div button"). No funcionaba, porque
+        # cada st.markdown()/st.button() queda envuelto en su propio
+        # contenedor de Streamlit — el <div> del ancla termina anidado un
+        # nivel más adentro de lo que el combinador "+" puede alcanzar, así
+        # que la regla nunca llegaba a matchear el botón real (por eso el
+        # botón de Backup no salía anaranjado, y el de Salir nunca se forzó
+        # a azul).
+        #
+        # Reemplazado por el patrón soportado de forma nativa por Streamlit:
+        # todo widget con un "key" recibe automáticamente la clase CSS
+        # ".st-key-<key>" en su contenedor, sin depender de la posición en
+        # el DOM. Un solo bloque <style> de acá cubre los dos botones del
+        # sidebar (Salir y Backup), cada uno con su propio key:
+        #   - "btn_logout_sidebar" → azul (#2563EB, hover #1D4ED8)
+        #   - "btn_backup_sidebar" → ámbar/anaranjado (#D97706, hover #B45309)
+        st.markdown("""
+            <style>
+            .st-key-btn_logout_sidebar button {
+                background-color: #2563EB !important;
+                border-color: #2563EB !important;
+                color: white !important;
+            }
+            .st-key-btn_logout_sidebar button:hover {
+                background-color: #1D4ED8 !important;
+                border-color: #1D4ED8 !important;
+                color: white !important;
+            }
+            .st-key-btn_backup_sidebar button {
+                background-color: #D97706 !important;
+                border-color: #D97706 !important;
+                color: white !important;
+            }
+            .st-key-btn_backup_sidebar button:hover {
+                background-color: #B45309 !important;
+                border-color: #B45309 !important;
+                color: white !important;
+            }
+            </style>
+        """, unsafe_allow_html=True)
+
+        if st.button("🚪 Cerrar sesión", use_container_width=True, key="btn_logout_sidebar"):
             logout()
             st.rerun()
 

@@ -1,5 +1,7 @@
 import os
+import re
 import csv
+import uuid
 import zipfile
 from io import BytesIO, StringIO
 import psycopg
@@ -508,8 +510,8 @@ def get_uso_almacenamiento():
 # ─── Backup de la base de datos (ítem prioridad alta, 09/08/2026) ──────────
 # Dos formatos, ambos generados en Python puro (sin pg_dump, que no está
 # garantizado en Streamlit Community Cloud):
-#   - SQL: un .sql con INSERTs, restaurable ejecutándolo contra una base con
-#     el esquema ya creado (init_db() lo crea solo).
+#   - SQL: un .sql con INSERTs, restaurable con restaurar_backup_sql() de
+#     acá abajo (ítem prioridad alta, 10/08/2026 — restauración por upsert).
 #   - CSV: un .zip con un .csv por tabla, para inspeccionar en Excel/Sheets.
 # Las dos funciones abren UNA sola conexión y recorren todas las tablas ahí
 # adentro (mismo criterio que el resto del proyecto: en Neon serverless el
@@ -519,6 +521,8 @@ def get_uso_almacenamiento():
 # para que el .sql se pueda ejecutar de arriba a abajo sin violar foreign
 # keys. Se arma a mano en vez de vía introspección del catálogo de Postgres
 # para no depender de que el esquema no tenga tablas ajenas al proyecto.
+# El mismo orden, invertido, se usa para el borrado en modo espejo de
+# restaurar_backup_sql() (hijas antes que padres, para no romper FKs).
 TABLAS_BACKUP = [
     "carreras",
     "usuarios",
@@ -543,30 +547,67 @@ TABLAS_BACKUP = [
 
 def _fila_a_insert(tabla, columnas, fila, conn):
     """
-    Arma un INSERT INTO ... VALUES (...) para una fila, escapando los
-    valores de forma segura con psycopg.sql (misma librería que usa el
-    resto del proyecto), sin depender de mogrify ni de armar el escapeo
-    a mano.
+    Arma un INSERT INTO ... VALUES (...) ON CONFLICT (id) DO UPDATE ... para
+    una fila, escapando los valores de forma segura con psycopg.sql (misma
+    librería que usa el resto del proyecto), sin depender de mogrify ni de
+    armar el escapeo a mano.
+
+    El ON CONFLICT (id) DO UPDATE (agregado 10/08/2026, ítem "Backup:
+    importación/restauración") es lo que permite que restaurar_backup_sql()
+    haga un upsert: si el id de la fila ya existe en la base viva, la
+    actualiza con los valores del backup; si no existe, la inserta. Todas
+    las tablas del proyecto usan "id SERIAL PRIMARY KEY" como primera
+    columna, así que este criterio es uniforme en las 19 tablas de
+    TABLAS_BACKUP.
     """
     columnas_sql = pgsql.SQL(", ").join(pgsql.Identifier(c) for c in columnas)
     valores_sql = pgsql.SQL(", ").join(pgsql.Literal(v) for v in fila)
-    stmt = pgsql.SQL("INSERT INTO {} ({}) VALUES ({});").format(
-        pgsql.Identifier(tabla), columnas_sql, valores_sql
+
+    columnas_update = [c for c in columnas if c != "id"]
+    if columnas_update:
+        update_sql = pgsql.SQL(", ").join(
+            pgsql.SQL("{} = EXCLUDED.{}").format(pgsql.Identifier(c), pgsql.Identifier(c))
+            for c in columnas_update
+        )
+        conflicto_sql = pgsql.SQL(" ON CONFLICT (id) DO UPDATE SET {}").format(update_sql)
+    else:
+        # Caso borde: una tabla con solo la columna "id" no tendría nada que
+        # actualizar — no pasa hoy en ninguna de las 19 tablas, pero se deja
+        # cubierto por las dudas.
+        conflicto_sql = pgsql.SQL(" ON CONFLICT (id) DO NOTHING")
+
+    stmt = pgsql.SQL("INSERT INTO {} ({}) VALUES ({}){};").format(
+        pgsql.Identifier(tabla), columnas_sql, valores_sql, conflicto_sql
     )
     return stmt.as_string(conn)
 
 def generar_backup_sql():
     """
-    Devuelve bytes de un .sql con un INSERT por fila de cada tabla en
-    TABLAS_BACKUP, envuelto en una transacción (BEGIN/COMMIT). Para
-    restaurar: crear una base nueva, correr init_db() (esto recrea el
-    esquema vacío) y después ejecutar este .sql contra esa base.
+    Devuelve bytes de un .sql con un INSERT (upsert por id) por fila de cada
+    tabla en TABLAS_BACKUP, envuelto en una transacción (BEGIN/COMMIT).
+
+    Restauración: usar la sección "📥 Restaurar backup" de Administración
+    (restaurar_backup_sql() de acá abajo), que sube este mismo archivo y lo
+    corre fila por fila. También se puede ejecutar manualmente contra una
+    base con el esquema ya creado (init_db()), aunque a mano se pierde el
+    reporte de filas que fallaron y el modo espejo.
+
+    Cada fila queda seguida por un comentario marcador con un delimitador
+    único generado al vuelo (UUID), del tipo "-- END_STMT_<uuid> id=<id>".
+    Este delimitador (no una simple línea en blanco) es lo que le permite a
+    restaurar_backup_sql() reconstruir cada INSERT de forma confiable aunque
+    algún campo de texto (una observación, una descripción) tenga un salto
+    de línea real adentro: partir el archivo por saltos de línea sueltos no
+    alcanzaría en ese caso, porque el INSERT ocuparía más de una línea física.
     """
+    delimitador = f"END_STMT_{uuid.uuid4().hex}"
     lineas = [
         "-- PsicoNexo — Backup de base de datos",
         f"-- Generado: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
         "-- Generado en Python con psycopg (no requiere pg_dump).",
-        "-- Para restaurar: correr init_db() contra una base vacía y después este archivo.",
+        "-- Restaurar desde Administración → 📥 Restaurar backup (upsert por id,",
+        "-- no borra nada salvo que actives el modo espejo).",
+        f"-- Delimitador interno de restauración: {delimitador}",
         "",
         "BEGIN;",
         "",
@@ -580,6 +621,9 @@ def generar_backup_sql():
                 lineas.append(f"-- Tabla: {tabla} ({len(filas)} filas)")
                 for fila in filas:
                     lineas.append(_fila_a_insert(tabla, columnas, fila, conn))
+                    # fila[0] es el id: "id" es siempre la primera columna
+                    # declarada en las 19 tablas de TABLAS_BACKUP.
+                    lineas.append(f"-- {delimitador} id={fila[0]}")
                 lineas.append("")
     lineas.append("COMMIT;")
     contenido = "\n".join(lineas)
@@ -607,3 +651,140 @@ def generar_backup_csv_zip():
                     zf.writestr(f"{tabla}.csv", csv_buffer.getvalue())
     buffer_zip.seek(0)
     return buffer_zip.getvalue()
+
+# ─── Restauración de backup (ítem prioridad alta, 10/08/2026) ─────────────
+# Decisiones de diseño (charladas y confirmadas el 10/08/2026, ver
+# PSICO_Mejoras_Pendientes.md):
+#   1. Upsert por id, no "vaciar todo antes": una fila del backup cuyo id ya
+#      existe en la base viva se ACTUALIZA con los valores del backup; si no
+#      existe, se INSERTA. Por defecto no se borra nada que esté en la base
+#      viva y no esté en el backup — restaurar un backup viejo no debe poder
+#      borrar por accidente algo cargado después.
+#   2. Fila por fila, no todo o nada: cada INSERT corre en su propio
+#      SAVEPOINT (con conn.transaction(), que psycopg3 anida como SAVEPOINT
+#      al estar ya dentro de una transacción abierta). Si una fila falla
+#      (típicamente un choque de UNIQUE — email o legajo — con OTRO id), se
+#      hace rollback de esa fila puntual y se sigue con las demás, en vez de
+#      abortar toda la restauración por un error aislado.
+#   3. Modo espejo (opcional, casilla aparte en la UI): además del upsert,
+#      borra de cada tabla las filas cuyo id NO aparezca en el backup, para
+#      dejar la base exactamente como estaba en el momento en que se generó
+#      ese backup. Incluye el caso de una tabla con 0 filas en el backup —
+#      ahí se vacía la tabla entera en la base viva. Se recorre
+#      TABLAS_BACKUP en orden INVERSO (tablas hijas antes que padres) para
+#      no romper foreign keys al borrar.
+
+def _parsear_backup_sql(texto):
+    """
+    Parsea el contenido de un .sql generado por generar_backup_sql() y
+    devuelve una lista de (tabla, id_str, statement_sql), en el mismo orden
+    en que aparecen en el archivo. Lanza ValueError si el archivo no tiene
+    el delimitador esperado (es decir, no es un backup de esta app).
+    """
+    m_delim = re.search(r"-- Delimitador interno de restauración:\s*(\S+)", texto)
+    if not m_delim:
+        raise ValueError(
+            "No reconozco este archivo como un backup de PsicoNexo (falta el "
+            "delimitador interno de restauración). Subí un .sql generado por "
+            "el botón de backup de esta misma app."
+        )
+    delimitador = m_delim.group(1)
+    marcador_re = re.compile(rf"^-- {re.escape(delimitador)} id=(\S+)$")
+
+    filas_parseadas = []
+    tabla_actual = None
+    buffer_lineas = []
+    for linea in texto.split("\n"):
+        stripped = linea.strip()
+
+        m_tabla = re.match(r"^-- Tabla:\s*(\w+)", stripped)
+        if m_tabla:
+            tabla_actual = m_tabla.group(1)
+            continue
+
+        m_marca = marcador_re.match(stripped)
+        if m_marca:
+            if buffer_lineas:
+                stmt = "\n".join(buffer_lineas).strip()
+                if stmt:
+                    filas_parseadas.append((tabla_actual, m_marca.group(1), stmt))
+            buffer_lineas = []
+            continue
+
+        buffer_lineas.append(linea)
+
+    return filas_parseadas
+
+def restaurar_backup_sql(contenido, modo_espejo=False):
+    """
+    Restaura un backup generado por generar_backup_sql(). Ver el bloque de
+    comentarios de arriba para las tres decisiones de diseño.
+
+    `contenido` puede ser bytes (tal cual entrega st.file_uploader) o str.
+
+    Devuelve:
+    {
+        "ok_total": int,                          # filas insertadas/actualizadas
+        "error_total": int,                        # filas que fallaron
+        "errores": [(tabla, id_str, mensaje), ...], # detalle, hasta 50
+        "borradas": int,                            # filas borradas (modo espejo)
+    }
+    """
+    texto = contenido.decode("utf-8") if isinstance(contenido, (bytes, bytearray)) else contenido
+
+    filas_parseadas = _parsear_backup_sql(texto)
+    if not filas_parseadas:
+        return {"ok_total": 0, "error_total": 0, "errores": [], "borradas": 0}
+
+    ok_total = 0
+    error_total = 0
+    errores = []
+    ids_por_tabla = {}
+
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            for tabla, id_str, stmt in filas_parseadas:
+                ids_por_tabla.setdefault(tabla, set()).add(id_str)
+                try:
+                    with conn.transaction():
+                        cur.execute(stmt)
+                    ok_total += 1
+                except Exception as e:
+                    error_total += 1
+                    if len(errores) < 50:
+                        errores.append((tabla, id_str, str(e)))
+
+            borradas = 0
+            if modo_espejo:
+                for tabla in reversed(TABLAS_BACKUP):
+                    ids_backup = ids_por_tabla.get(tabla, set())
+                    try:
+                        ids_int = [int(v) for v in ids_backup]
+                    except ValueError:
+                        # id no numérico: no debería pasar (todas las tablas
+                        # usan SERIAL), pero por seguridad no tocamos esa
+                        # tabla en vez de arriesgar un borrado mal dirigido.
+                        continue
+                    try:
+                        with conn.transaction():
+                            if ids_int:
+                                cur.execute(
+                                    pgsql.SQL("DELETE FROM {} WHERE id != ALL(%s);").format(
+                                        pgsql.Identifier(tabla)
+                                    ),
+                                    (ids_int,),
+                                )
+                            else:
+                                # Tabla sin ninguna fila en el backup: el
+                                # modo espejo la vacía por completo.
+                                cur.execute(pgsql.SQL("DELETE FROM {};").format(pgsql.Identifier(tabla)))
+                            borradas += cur.rowcount
+                    except Exception as e:
+                        error_total += 1
+                        if len(errores) < 50:
+                            errores.append((tabla, "—", f"Error al borrar filas del modo espejo: {e}"))
+
+        conn.commit()
+
+    get_uso_almacenamiento.clear()
+    return {"ok_total": ok_total, "error_total": error_total, "errores": errores, "borradas": borradas}

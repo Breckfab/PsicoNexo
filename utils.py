@@ -11,7 +11,7 @@ No se modificó ningún comportamiento al migrar este contenido: los valores
 y la lógica son exactamente los mismos que ya estaban en uso.
 """
 
-from datetime import timedelta
+from datetime import date, timedelta
 import logging
 
 # ─── Logging centralizado ───────────────────────────────────────────────────
@@ -56,6 +56,68 @@ COLORES = {
     "aprobada": "🟢",
     "desaprobada": "🔴",
 }
+
+
+def determinar_estado_cuatrimestre(anio_actual, todas_configs):
+    """
+    Determina en qué cuatrimestre está el alumno en base a las FECHAS REALES
+    configuradas por él (⚙️ Configurar fechas del cuatrimestre), en vez de un
+    rango fijo de meses.
+
+    Esto evita el bug de mostrar "1° Cuatrimestre" cuando en realidad ya
+    terminó (por ejemplo, porque el alumno aprobó todo antes de la fecha de
+    fin) y el 2° Cuatrimestre todavía no arrancó.
+
+    Movida acá desde pages/home.py (ítem "Consolidar Home en una sola
+    conexión", 12/08/2026): es una función pura (no toca la base), y
+    db.py la necesita para resolver get_home_data_completo() sin tener
+    que importar pages/home.py (lo que generaría un import circular, ya
+    que home.py importa de db.py).
+
+    Devuelve una tupla:
+    - cuatrimestre_para_query: "1° Cuatrimestre" o "2° Cuatrimestre", el que
+      se usa para buscar las materias que el alumno está cursando.
+    - header_texto: texto a mostrar en el encabezado de la sección "Cursando".
+    - en_transicion: True si estamos en un período sin cuatrimestre activo
+      (uno finalizado y el otro sin empezar, o el año ya finalizado), para
+      poder mostrar un mensaje distinto en vez del encabezado normal.
+    """
+    hoy = date.today()
+    config_1 = todas_configs.get((anio_actual, "1° Cuatrimestre"))
+    config_2 = todas_configs.get((anio_actual, "2° Cuatrimestre"))
+
+    cuatri_1_finalizado = config_1 is not None and hoy > config_1[1]
+    cuatri_2_no_empezo = config_2 is None or hoy < config_2[0]
+    cuatri_2_finalizado = config_2 is not None and hoy > config_2[1]
+    cuatri_2_en_curso = config_2 is not None and config_2[0] <= hoy <= config_2[1]
+    cuatri_1_en_curso = config_1 is not None and config_1[0] <= hoy <= config_1[1]
+
+    if cuatri_1_finalizado and cuatri_2_no_empezo:
+        return (
+            "2° Cuatrimestre",
+            "PRIMER CUATRIMESTRE FINALIZADO — SEGUNDO CUATRIMESTRE NO HA COMENZADO AÚN",
+            True,
+        )
+
+    if cuatri_2_finalizado:
+        return (
+            "2° Cuatrimestre",
+            f"AÑO {anio_actual} FINALIZADO",
+            True,
+        )
+
+    if cuatri_2_en_curso:
+        return "2° Cuatrimestre", f"2° Cuatrimestre {anio_actual}", False
+
+    if cuatri_1_en_curso:
+        return "1° Cuatrimestre", f"1° Cuatrimestre {anio_actual}", False
+
+    # Sin fechas configuradas todavía para ninguno de los dos: fallback al
+    # heurístico anterior por mes, para no dejar al alumno sin nada mientras
+    # carga las fechas por primera vez.
+    mes = hoy.month
+    cuatri_fallback = "1° Cuatrimestre" if 3 <= mes <= 7 else "2° Cuatrimestre"
+    return cuatri_fallback, f"{cuatri_fallback} {anio_actual}", False
 
 
 def contar_clases_en_rango(dias_str, fecha_inicio, fecha_fin, feriados=None):

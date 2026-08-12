@@ -1,5 +1,8 @@
 import streamlit as st
-from db import get_conn, get_feriados, get_clases_hoy, get_historial_comisiones, get_periodos_comision
+from db import (
+    get_conn, get_feriados, get_clases_hoy, get_historial_comisiones, get_periodos_comision,
+    get_home_data_completo,
+)
 from datetime import datetime, date, timedelta
 import re
 from utils import NOMBRES_ANIO, DIA_INDEX, contar_clases_en_rango, contar_clases_multi_periodo, clasificar_asistencia, convertir_link_preview
@@ -454,6 +457,7 @@ def guardar_cursada(usuario_id, materia_id, anio, cuatrimestre, modalidad, turno
     get_todas_cursadas.clear()
     get_clases_hoy.clear()
     get_cursadas_tab_data.clear()
+    get_home_data_completo.clear()
 
 def cambiar_comision(usuario_id, materia_id, fecha_cambio, nuevo_numero, nuevo_turno, nuevos_dias,
                       nuevo_horario, nuevo_link, nuevo_prof1, nuevo_email_prof1, nuevo_prof2, nuevo_email_prof2):
@@ -510,6 +514,7 @@ def cambiar_comision(usuario_id, materia_id, fecha_cambio, nuevo_numero, nuevo_t
     get_clases_hoy.clear()
     get_historial_comisiones.clear()
     get_cursadas_tab_data.clear()
+    get_home_data_completo.clear()
     return True, f"Comisión actualizada a {nuevo_numero}."
 
 def borrar_cursada(usuario_id, materia_id):
@@ -520,6 +525,7 @@ def borrar_cursada(usuario_id, materia_id):
     get_todas_cursadas.clear()
     get_clases_hoy.clear()
     get_cursadas_tab_data.clear()
+    get_home_data_completo.clear()
 
 def borrar_cursada_especifica(usuario_id, materia_id, anio_cursada, cuatrimestre):
     """Borra únicamente la cursada puntual (año + cuatrimestre) indicada, sin
@@ -541,6 +547,7 @@ def borrar_cursada_especifica(usuario_id, materia_id, anio_cursada, cuatrimestre
     get_todas_cursadas.clear()
     get_clases_hoy.clear()
     get_cursadas_tab_data.clear()
+    get_home_data_completo.clear()
 
 def guardar_tarea(usuario_id, materia_id, numero, descripcion, fecha_vencimiento):
     with get_conn() as conn:
@@ -551,6 +558,7 @@ def guardar_tarea(usuario_id, materia_id, numero, descripcion, fecha_vencimiento
             """, (usuario_id, materia_id, numero, descripcion, fecha_vencimiento))
         conn.commit()
     get_tareas_materia.clear()
+    get_home_data_completo.clear()
 
 def actualizar_tarea(tarea_id, descripcion, fecha_vencimiento, completada):
     with get_conn() as conn:
@@ -561,6 +569,7 @@ def actualizar_tarea(tarea_id, descripcion, fecha_vencimiento, completada):
             """, (descripcion, fecha_vencimiento, completada, tarea_id))
         conn.commit()
     get_tareas_materia.clear()
+    get_home_data_completo.clear()
 
 def borrar_tarea(tarea_id):
     with get_conn() as conn:
@@ -568,6 +577,7 @@ def borrar_tarea(tarea_id):
             cur.execute("DELETE FROM tareas WHERE id = %s;", (tarea_id,))
         conn.commit()
     get_tareas_materia.clear()
+    get_home_data_completo.clear()
 
 # ─── Asistencia ────────────────────────────────────────────────────────────
 
@@ -606,6 +616,7 @@ def agregar_falta(usuario_id, materia_id, fecha, justificada=False):
         conn.commit()
     get_faltas_materia.clear()
     get_cursadas_tab_data.clear()
+    get_home_data_completo.clear()
 
 def borrar_falta(falta_id):
     with get_conn() as conn:
@@ -614,6 +625,7 @@ def borrar_falta(falta_id):
         conn.commit()
     get_faltas_materia.clear()
     get_cursadas_tab_data.clear()
+    get_home_data_completo.clear()
 
 def actualizar_falta(falta_id, fecha, justificada):
     with get_conn() as conn:
@@ -625,6 +637,7 @@ def actualizar_falta(falta_id, fecha, justificada):
         conn.commit()
     get_faltas_materia.clear()
     get_cursadas_tab_data.clear()
+    get_home_data_completo.clear()
 
 def calcular_asistencia(usuario_id, materia_id, dias_str, anio_cursada, cuatrimestre, feriados=None,
                          cursada_id=None, fecha_desde_comision=None,

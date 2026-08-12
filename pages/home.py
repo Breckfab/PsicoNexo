@@ -1,64 +1,13 @@
 import streamlit as st
-from db import get_conn, get_feriados, agregar_feriado, borrar_feriado, get_clases_hoy, get_periodos_comision
+from db import (
+    get_conn, get_feriados, agregar_feriado, borrar_feriado,
+    get_periodos_comision, get_home_data_completo,
+)
 from datetime import datetime, date, timedelta
-from utils import DIA_INDEX, contar_clases_en_rango, contar_clases_multi_periodo, clasificar_asistencia
-
-
-def determinar_estado_cuatrimestre(anio_actual, todas_configs):
-    """
-    Determina en qué cuatrimestre está el alumno en base a las FECHAS REALES
-    configuradas por él (⚙️ Configurar fechas del cuatrimestre), en vez de un
-    rango fijo de meses.
-
-    Esto evita el bug de mostrar "1° Cuatrimestre" cuando en realidad ya
-    terminó (por ejemplo, porque el alumno aprobó todo antes de la fecha de
-    fin) y el 2° Cuatrimestre todavía no arrancó.
-
-    Devuelve una tupla:
-    - cuatrimestre_para_query: "1° Cuatrimestre" o "2° Cuatrimestre", el que
-      se usa para buscar las materias que el alumno está cursando.
-    - header_texto: texto a mostrar en el encabezado de la sección "Cursando".
-    - en_transicion: True si estamos en un período sin cuatrimestre activo
-      (uno finalizado y el otro sin empezar, o el año ya finalizado), para
-      poder mostrar un mensaje distinto en vez del encabezado normal.
-    """
-    hoy = date.today()
-    config_1 = todas_configs.get((anio_actual, "1° Cuatrimestre"))
-    config_2 = todas_configs.get((anio_actual, "2° Cuatrimestre"))
-
-    cuatri_1_finalizado = config_1 is not None and hoy > config_1[1]
-    cuatri_2_no_empezo = config_2 is None or hoy < config_2[0]
-    cuatri_2_finalizado = config_2 is not None and hoy > config_2[1]
-    cuatri_2_en_curso = config_2 is not None and config_2[0] <= hoy <= config_2[1]
-    cuatri_1_en_curso = config_1 is not None and config_1[0] <= hoy <= config_1[1]
-
-    if cuatri_1_finalizado and cuatri_2_no_empezo:
-        return (
-            "2° Cuatrimestre",
-            "PRIMER CUATRIMESTRE FINALIZADO — SEGUNDO CUATRIMESTRE NO HA COMENZADO AÚN",
-            True,
-        )
-
-    if cuatri_2_finalizado:
-        return (
-            "2° Cuatrimestre",
-            f"AÑO {anio_actual} FINALIZADO",
-            True,
-        )
-
-    if cuatri_2_en_curso:
-        return "2° Cuatrimestre", f"2° Cuatrimestre {anio_actual}", False
-
-    if cuatri_1_en_curso:
-        return "1° Cuatrimestre", f"1° Cuatrimestre {anio_actual}", False
-
-    # Sin fechas configuradas todavía para ninguno de los dos: fallback al
-    # heurístico anterior por mes, para no dejar al alumno sin nada mientras
-    # carga las fechas por primera vez.
-    mes = hoy.month
-    cuatri_fallback = "1° Cuatrimestre" if 3 <= mes <= 7 else "2° Cuatrimestre"
-    return cuatri_fallback, f"{cuatri_fallback} {anio_actual}", False
-
+from utils import (
+    DIA_INDEX, contar_clases_en_rango, contar_clases_multi_periodo,
+    clasificar_asistencia, determinar_estado_cuatrimestre,
+)
 
 # ─── Configuración de cuatrimestre ────────────────────────────────────────────
 
@@ -98,7 +47,7 @@ def guardar_config_cuatrimestre(usuario_id, anio, cuatrimestre, fecha_inicio, fe
         conn.commit()
     get_config_cuatrimestre.clear()
     get_todas_configs.clear()
-    get_home_data.clear()
+    get_home_data_completo.clear()
 
 def calcular_progreso_cuatrimestre(fecha_inicio, fecha_fin):
     hoy = date.today()
@@ -111,124 +60,6 @@ def calcular_progreso_cuatrimestre(fecha_inicio, fecha_fin):
     porcentaje = round((dias_transcurridos / dias_totales) * 100, 1) if dias_totales > 0 else 0
     dias_restantes = (fecha_fin - hoy).days
     return porcentaje, dias_transcurridos, dias_totales, f"{dias_restantes} días restantes"
-
-# ─── Asistencia ────────────────────────────────────────────────────────────
-
-@st.cache_data(ttl=60)
-def get_faltas_por_materia(usuario_id):
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute("""
-                SELECT materia_id, COUNT(*)
-                FROM asistencias
-                WHERE usuario_id = %s
-                GROUP BY materia_id;
-            """, (usuario_id,))
-            return {r[0]: r[1] for r in cur.fetchall()}
-
-
-# ─── Batch query principal ─────────────────────────────────────────────────────
-
-@st.cache_data(ttl=60)
-def get_home_data(usuario_id, carrera_id):
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute("""
-                WITH conteos AS (
-                    SELECT
-                        COUNT(*) FILTER (WHERE estado IN ('aprobada', 'promocionada')) AS aprobadas,
-                        COUNT(*) FILTER (WHERE estado = 'cursando')                    AS cursando,
-                        COUNT(*) FILTER (WHERE estado = 'regular')                     AS regulares,
-                        COUNT(*) FILTER (WHERE estado = 'desaprobada')                 AS desaprobadas
-                    FROM alumno_materias
-                    WHERE usuario_id = %s
-                ),
-                total AS (
-                    SELECT COUNT(*) AS total FROM materias WHERE carrera_id = %s
-                )
-                SELECT t.total, c.aprobadas, c.cursando, c.regulares, c.desaprobadas
-                FROM total t, conteos c;
-            """, (usuario_id, carrera_id))
-            stats_row = cur.fetchone()
-
-            cur.execute("""
-                SELECT anio, cuatrimestre, fecha_inicio, fecha_fin
-                FROM configuracion_cuatrimestre
-                WHERE usuario_id = %s
-                ORDER BY anio DESC, cuatrimestre;
-            """, (usuario_id,))
-            config_rows = cur.fetchall()
-
-    total, aprobadas, cursando, regulares, desaprobadas = stats_row
-    avance = round((aprobadas / total) * 100, 1) if total > 0 else 0
-    configs = {(r[0], r[1]): (r[2], r[3]) for r in config_rows}
-    return total, aprobadas, cursando, regulares, desaprobadas, avance, configs
-
-# ─── Queries secundarias ───────────────────────────────────────────────────────
-
-@st.cache_data(ttl=60)
-def get_tareas_pendientes(usuario_id):
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute("""
-                SELECT t.numero, t.descripcion, t.fecha_vencimiento, m.nombre
-                FROM tareas t
-                JOIN materias m ON t.materia_id = m.id
-                WHERE t.usuario_id = %s AND t.completada = FALSE
-                ORDER BY t.fecha_vencimiento ASC NULLS LAST;
-            """, (usuario_id,))
-            return cur.fetchall()
-
-@st.cache_data(ttl=60)
-def get_materias_cursando_con_notas(usuario_id, anio_actual, cuatrimestre_actual):
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute("""
-                WITH materias_cursando AS (
-                    SELECT
-                        m.nombre, m.anio, c.cuatrimestre, c.anio_cursada,
-                        c.profesor1, c.dias, c.horario, c.modalidad,
-                        m.id AS materia_id, am.usuario_id,
-                        c.id AS cursada_id, c.numero_comision, c.fecha_desde_comision
-                    FROM alumno_materias am
-                    JOIN materias m  ON am.materia_id = m.id
-                    JOIN cursadas c  ON c.materia_id = m.id AND c.usuario_id = am.usuario_id
-                    WHERE am.usuario_id   = %s
-                      AND am.estado       = 'cursando'
-                      AND c.anio_cursada  = %s
-                      AND (c.cuatrimestre = %s OR c.cuatrimestre = 'Anual')
-                ),
-                evals_usuario AS (
-                    SELECT
-                        materia_id,
-                        COUNT(id)                                                             AS total_notas,
-                        ROUND(AVG(nota)::numeric, 2)                                          AS promedio,
-                        COUNT(id) FILTER (WHERE aprobado = TRUE)                              AS aprobadas,
-                        COUNT(id) FILTER (WHERE aprobado = FALSE AND nota IS NOT NULL)         AS desaprobadas,
-                        STRING_AGG(
-                            CASE WHEN nota IS NOT NULL
-                                THEN tipo || ': ' || nota::text
-                            END,
-                            ' · ' ORDER BY fecha ASC NULLS LAST
-                        ) AS detalle_notas
-                    FROM evaluaciones
-                    WHERE usuario_id = %s
-                    GROUP BY materia_id
-                )
-                SELECT
-                    mc.nombre, mc.anio, mc.cuatrimestre, mc.anio_cursada,
-                    mc.profesor1, mc.dias, mc.horario, mc.modalidad, mc.materia_id,
-                    COALESCE(ev.total_notas, 0) AS total_notas,
-                    ev.promedio,
-                    COALESCE(ev.aprobadas, 0)    AS aprobadas,
-                    COALESCE(ev.desaprobadas, 0) AS desaprobadas,
-                    ev.detalle_notas,
-                    mc.cursada_id, mc.numero_comision, mc.fecha_desde_comision
-                FROM materias_cursando mc
-                LEFT JOIN evals_usuario ev ON ev.materia_id = mc.materia_id
-                ORDER BY mc.anio, mc.nombre;
-            """, (usuario_id, anio_actual, cuatrimestre_actual, usuario_id))
-            return cur.fetchall()
 
 def calcular_estado_cursada(cuatrimestre):
     mes = datetime.now().month
@@ -653,31 +484,17 @@ def mostrar(usuario):
     mes_actual = datetime.now().month
     anio_actual = datetime.now().year if mes_actual >= 3 else datetime.now().year - 1
 
-    # Stats + configs en 1 roundtrip
-    total, aprobadas, cursando, regulares, desaprobadas, avance, todas_configs = get_home_data(
-        usuario["id"], usuario["carrera_id"]
+    # ── Batch único de toda la pantalla (ítem prioridad alta, latencia de
+    # carga, 12/08/2026): antes eran 6 conexiones fijas al pool (stats,
+    # configs, materias cursando + notas, faltas, feriados, tareas y
+    # clases de hoy). Ahora es 1 sola — ver get_home_data_completo en db.py.
+    (total, aprobadas, cursando, regulares, desaprobadas, avance, todas_configs,
+     cuatrimestre_para_query, header_cuatrimestre, en_transicion,
+     materias_cursando, faltas_map, feriados_set, tareas, clases_hoy) = get_home_data_completo(
+        usuario["id"], usuario["carrera_id"], anio_actual
     )
 
-    # Cuatrimestre "actual" en base a las FECHAS REALES configuradas por el
-    # alumno (no a un rango fijo de meses), para reflejar bien casos como
-    # haber aprobado todo el 1er cuatrimestre antes de que arranque el 2do.
-    cuatrimestre_para_query, header_cuatrimestre, en_transicion = determinar_estado_cuatrimestre(
-        anio_actual, todas_configs
-    )
-
-    # Se adelanta la carga de materias cursando + faltas + feriados (antes
-    # se cargaban más abajo, en la sección "Cursando") para poder calcular
-    # y mostrar el banner de alerta de asistencia arriba de todo, junto con
-    # el de tareas. Estos mismos datos se reutilizan después en el loop de
-    # materias, sin volver a pedirlos.
-    materias_cursando = get_materias_cursando_con_notas(
-        usuario["id"], anio_actual, cuatrimestre_para_query
-    )
-    faltas_map = get_faltas_por_materia(usuario["id"])
-    feriados_set = {f[1] for f in get_feriados(usuario["id"])}
-
-    # Tareas pendientes — se cargan primero para mostrar alertas arriba del todo
-    tareas = get_tareas_pendientes(usuario["id"])
+    # Tareas y asistencia — alertas arriba del todo
     mostrar_alertas_vencimiento(tareas)
     mostrar_alerta_asistencia(materias_cursando, todas_configs, faltas_map, feriados_set)
 
@@ -788,7 +605,6 @@ def mostrar(usuario):
 
     with col1:
         st.markdown("### 📅 Hoy")
-        clases_hoy = get_clases_hoy(usuario["id"])
         if clases_hoy:
             for clase in clases_hoy:
                 mnombre, horario, link, modalidad, turno = clase

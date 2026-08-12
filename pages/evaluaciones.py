@@ -1,5 +1,5 @@
 import streamlit as st
-from db import get_conn
+from db import get_conn, get_home_data_completo
 from datetime import date
 from utils import NOMBRES_ANIO
 
@@ -42,6 +42,7 @@ def agregar_evaluacion(usuario_id, materia_id, tipo, descripcion, nota, fecha, a
             """, (usuario_id, materia_id, tipo, descripcion, nota, fecha, aprobado))
         conn.commit()
     get_evaluaciones.clear()
+    get_home_data_completo.clear()
 
 def actualizar_evaluacion(eval_id, descripcion, nota, fecha, aprobado):
     nota = round(float(nota), 2) if nota is not None else None
@@ -54,6 +55,7 @@ def actualizar_evaluacion(eval_id, descripcion, nota, fecha, aprobado):
             """, (descripcion, nota, fecha, aprobado, eval_id))
         conn.commit()
     get_evaluaciones.clear()
+    get_home_data_completo.clear()
 
 def eliminar_evaluacion(eval_id):
     with get_conn() as conn:
@@ -61,6 +63,7 @@ def eliminar_evaluacion(eval_id):
             cur.execute("DELETE FROM evaluaciones WHERE id = %s;", (eval_id,))
         conn.commit()
     get_evaluaciones.clear()
+    get_home_data_completo.clear()
 
 def mostrar(usuario):
     if not usuario:

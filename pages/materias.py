@@ -1,5 +1,5 @@
 import streamlit as st
-from db import get_conn
+from db import get_conn, get_home_data_completo
 from utils import NOMBRES_ANIO
 
 ESTADOS = ["pendiente", "cursando", "regular", "aprobada", "desaprobada", "promocionada"]
@@ -82,6 +82,7 @@ def actualizar_estado_materia(usuario_id, materia_id, nuevo_estado):
             """, (usuario_id, materia_id, nuevo_estado))
         conn.commit()
     get_estados_alumno.clear()
+    get_home_data_completo.clear()
 
 
 def correlativas_cumplidas(materia_id, correlativas_map, estados_map):

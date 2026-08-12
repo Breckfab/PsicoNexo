@@ -12,6 +12,7 @@ from dotenv import load_dotenv
 import streamlit as st
 from contextlib import contextmanager
 from datetime import datetime
+from utils import determinar_estado_cuatrimestre
 
 load_dotenv()
 
@@ -418,6 +419,7 @@ def agregar_feriado(usuario_id, fecha, descripcion=None):
             """, (usuario_id, fecha, descripcion))
         conn.commit()
     get_feriados.clear()
+    get_home_data_completo.clear()
 
 def borrar_feriado(feriado_id):
     with get_conn() as conn:
@@ -425,6 +427,7 @@ def borrar_feriado(feriado_id):
             cur.execute("DELETE FROM feriados WHERE id = %s;", (feriado_id,))
         conn.commit()
     get_feriados.clear()
+    get_home_data_completo.clear()
 
 # ─── Clases de hoy ──────────────────────────────────────────────────────────
 # Antes estaba duplicada, con SQL casi idéntico, en cursadas.py y home.py
@@ -432,6 +435,12 @@ def borrar_feriado(feriado_id):
 # y home.py", 27/07/2026). Se centraliza acá con la versión que incluye
 # `turno`, que es la más completa de las dos. Los llamadores que no necesiten
 # el turno simplemente ignoran ese valor al desempaquetar la tupla.
+#
+# NOTA (12/08/2026): pages/home.py ya NO llama a esta función — su propio
+# batch (get_home_data_completo, más abajo) trae las clases de hoy con el
+# mismo SQL en la misma conexión que el resto de los datos de esa pantalla,
+# para no abrir una conexión extra. Esta función se mantiene tal cual porque
+# pages/cursadas.py sigue usándola.
 
 @st.cache_data(ttl=60)
 def get_clases_hoy(usuario_id):
@@ -506,6 +515,175 @@ def get_uso_almacenamiento():
         with conn.cursor() as cur:
             cur.execute("SELECT pg_database_size(current_database());")
             return cur.fetchone()[0]
+
+# ─── Batch principal de Home (ítem prioridad alta, latencia de carga,
+# 12/08/2026) ────────────────────────────────────────────────────────────
+# Antes, cargar Home abría 6 conexiones fijas al pool antes de poder pintar
+# nada: stats + configs (antes get_home_data, en home.py), materias
+# cursando + notas (antes get_materias_cursando_con_notas, en home.py),
+# faltas por materia (antes get_faltas_por_materia, en home.py), feriados
+# (antes get_feriados, acá arriba), tareas pendientes (antes
+# get_tareas_pendientes, en home.py) y clases de hoy (antes get_clases_hoy,
+# acá arriba). Se consolida todo en una sola conexión, mismo criterio que ya
+# se usa en get_cursadas_tab_data (cursadas.py) y
+# get_estadisticas_asistencia_data (estadisticas.py): en Neon serverless el
+# costo real es el round-trip de adquirir/chequear la conexión, no las
+# queries en sí — pedirla 1 vez en vez de 6 achica bastante la latencia de
+# la pantalla que más se visita.
+#
+# NOTA: duplica a propósito el SQL de get_feriados y get_clases_hoy (que
+# siguen existiendo tal cual, sin cambios, porque pages/cursadas.py las sigue
+# usando) en vez de llamarlas, para no abrir una conexión extra por cada una
+# — mismo criterio que ya usa get_cursadas_tab_data con sus propias tablas.
+#
+# Invalidación de caché: todas las funciones que escriben datos que esta
+# pantalla muestra (feriados, tareas, faltas, cursadas/comisiones, estado de
+# materias, evaluaciones/notas) limpian este caché además del suyo propio.
+# Ver agregar_feriado/borrar_feriado más arriba, y en pages/cursadas.py,
+# pages/materias.py y pages/evaluaciones.py.
+
+@st.cache_data(ttl=60)
+def get_home_data_completo(usuario_id, carrera_id, anio_actual):
+    """
+    Devuelve todo lo que necesita pages/home.py para pintar la pantalla
+    principal, en una sola conexión:
+    (total, aprobadas, cursando, regulares, desaprobadas, avance, configs,
+     cuatrimestre_para_query, header_cuatrimestre, en_transicion,
+     materias_cursando, faltas_map, feriados_set, tareas, clases_hoy)
+    """
+    hoy = datetime.now()
+    dia_semana = ["Lunes","Martes","Miércoles","Jueves","Viernes","Sábado","Domingo"][hoy.weekday()]
+
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            # ── Stats de avance de carrera ──────────────────────────────
+            cur.execute("""
+                WITH conteos AS (
+                    SELECT
+                        COUNT(*) FILTER (WHERE estado IN ('aprobada', 'promocionada')) AS aprobadas,
+                        COUNT(*) FILTER (WHERE estado = 'cursando')                    AS cursando,
+                        COUNT(*) FILTER (WHERE estado = 'regular')                     AS regulares,
+                        COUNT(*) FILTER (WHERE estado = 'desaprobada')                 AS desaprobadas
+                    FROM alumno_materias
+                    WHERE usuario_id = %s
+                ),
+                total AS (
+                    SELECT COUNT(*) AS total FROM materias WHERE carrera_id = %s
+                )
+                SELECT t.total, c.aprobadas, c.cursando, c.regulares, c.desaprobadas
+                FROM total t, conteos c;
+            """, (usuario_id, carrera_id))
+            total, aprobadas, cursando, regulares, desaprobadas = cur.fetchone()
+            avance = round((aprobadas / total) * 100, 1) if total > 0 else 0
+
+            # ── Configuración de fechas de cuatrimestre ──────────────────
+            cur.execute("""
+                SELECT anio, cuatrimestre, fecha_inicio, fecha_fin
+                FROM configuracion_cuatrimestre
+                WHERE usuario_id = %s
+                ORDER BY anio DESC, cuatrimestre;
+            """, (usuario_id,))
+            configs = {(r[0], r[1]): (r[2], r[3]) for r in cur.fetchall()}
+
+            # Cuatrimestre "actual" según las fechas reales configuradas —
+            # se resuelve acá adentro (no en home.py) para poder pedir las
+            # materias cursando del cuatrimestre correcto en esta misma
+            # conexión, sin ida y vuelta extra al pool.
+            cuatrimestre_para_query, header_cuatrimestre, en_transicion = determinar_estado_cuatrimestre(
+                anio_actual, configs
+            )
+
+            # ── Materias cursando + notas ────────────────────────────────
+            cur.execute("""
+                WITH materias_cursando AS (
+                    SELECT
+                        m.nombre, m.anio, c.cuatrimestre, c.anio_cursada,
+                        c.profesor1, c.dias, c.horario, c.modalidad,
+                        m.id AS materia_id, am.usuario_id,
+                        c.id AS cursada_id, c.numero_comision, c.fecha_desde_comision
+                    FROM alumno_materias am
+                    JOIN materias m  ON am.materia_id = m.id
+                    JOIN cursadas c  ON c.materia_id = m.id AND c.usuario_id = am.usuario_id
+                    WHERE am.usuario_id   = %s
+                      AND am.estado       = 'cursando'
+                      AND c.anio_cursada  = %s
+                      AND (c.cuatrimestre = %s OR c.cuatrimestre = 'Anual')
+                ),
+                evals_usuario AS (
+                    SELECT
+                        materia_id,
+                        COUNT(id)                                                             AS total_notas,
+                        ROUND(AVG(nota)::numeric, 2)                                          AS promedio,
+                        COUNT(id) FILTER (WHERE aprobado = TRUE)                              AS aprobadas,
+                        COUNT(id) FILTER (WHERE aprobado = FALSE AND nota IS NOT NULL)         AS desaprobadas,
+                        STRING_AGG(
+                            CASE WHEN nota IS NOT NULL
+                                THEN tipo || ': ' || nota::text
+                            END,
+                            ' · ' ORDER BY fecha ASC NULLS LAST
+                        ) AS detalle_notas
+                    FROM evaluaciones
+                    WHERE usuario_id = %s
+                    GROUP BY materia_id
+                )
+                SELECT
+                    mc.nombre, mc.anio, mc.cuatrimestre, mc.anio_cursada,
+                    mc.profesor1, mc.dias, mc.horario, mc.modalidad, mc.materia_id,
+                    COALESCE(ev.total_notas, 0) AS total_notas,
+                    ev.promedio,
+                    COALESCE(ev.aprobadas, 0)    AS aprobadas,
+                    COALESCE(ev.desaprobadas, 0) AS desaprobadas,
+                    ev.detalle_notas,
+                    mc.cursada_id, mc.numero_comision, mc.fecha_desde_comision
+                FROM materias_cursando mc
+                LEFT JOIN evals_usuario ev ON ev.materia_id = mc.materia_id
+                ORDER BY mc.anio, mc.nombre;
+            """, (usuario_id, anio_actual, cuatrimestre_para_query, usuario_id))
+            materias_cursando = cur.fetchall()
+
+            # ── Faltas por materia ───────────────────────────────────────
+            cur.execute("""
+                SELECT materia_id, COUNT(*)
+                FROM asistencias
+                WHERE usuario_id = %s
+                GROUP BY materia_id;
+            """, (usuario_id,))
+            faltas_map = {r[0]: r[1] for r in cur.fetchall()}
+
+            # ── Feriados ──────────────────────────────────────────────────
+            cur.execute("""
+                SELECT id, fecha, descripcion
+                FROM feriados
+                WHERE usuario_id = %s
+                ORDER BY fecha;
+            """, (usuario_id,))
+            feriados_set = {r[1] for r in cur.fetchall()}
+
+            # ── Tareas pendientes ────────────────────────────────────────
+            cur.execute("""
+                SELECT t.numero, t.descripcion, t.fecha_vencimiento, m.nombre
+                FROM tareas t
+                JOIN materias m ON t.materia_id = m.id
+                WHERE t.usuario_id = %s AND t.completada = FALSE
+                ORDER BY t.fecha_vencimiento ASC NULLS LAST;
+            """, (usuario_id,))
+            tareas = cur.fetchall()
+
+            # ── Clases de hoy ─────────────────────────────────────────────
+            cur.execute("""
+                SELECT m.nombre, c.horario, c.link, c.modalidad, c.turno
+                FROM cursadas c
+                JOIN materias m ON c.materia_id = m.id
+                JOIN alumno_materias am ON am.materia_id = m.id AND am.usuario_id = c.usuario_id
+                WHERE c.usuario_id = %s
+                AND am.estado = 'cursando'
+                AND c.dias ILIKE %s;
+            """, (usuario_id, f"%{dia_semana}%"))
+            clases_hoy = cur.fetchall()
+
+    return (total, aprobadas, cursando, regulares, desaprobadas, avance, configs,
+            cuatrimestre_para_query, header_cuatrimestre, en_transicion,
+            materias_cursando, faltas_map, feriados_set, tareas, clases_hoy)
 
 # ─── Backup de la base de datos (ítem prioridad alta, 09/08/2026) ──────────
 # Dos formatos, ambos generados en Python puro (sin pg_dump, que no está

@@ -685,6 +685,68 @@ def get_home_data_completo(usuario_id, carrera_id, anio_actual):
             cuatrimestre_para_query, header_cuatrimestre, en_transicion,
             materias_cursando, faltas_map, feriados_set, tareas, clases_hoy)
 
+# ─── Batch de Plan de Estudios (ítem prioridad alta, latencia de carga,
+# 13/08/2026) ────────────────────────────────────────────────────────────
+# Antes, pages/materias.py abría 3 conexiones fijas al pool antes de poder
+# pintar nada: materias de la carrera (antes get_materias_carrera), estado
+# de cada materia para el alumno (antes get_estados_alumno) y correlativas
+# de toda la carrera (antes get_correlativas_carrera). Se consolida todo en
+# una sola conexión, mismo criterio que get_home_data_completo (arriba) y
+# get_cursadas_tab_data (cursadas.py): en Neon serverless el costo real es
+# el round-trip de adquirir la conexión, no las queries en sí.
+#
+# Plan de Estudios es la segunda pantalla más visitada después de Home
+# (es el punto de entrada para marcar una materia como cursando o
+# aprobada), así que el ahorro de 3→1 conexiones tiene impacto directo en
+# la experiencia de uso diario.
+#
+# Invalidación de caché: actualizar_estado_materia() (única función que
+# escribe en alumno_materias) limpia este caché además del suyo propio.
+
+@st.cache_data(ttl=60)
+def get_materias_data_completo(usuario_id, carrera_id):
+    """
+    Devuelve, en una sola conexión, todo lo que necesita pages/materias.py
+    para pintar el Plan de Estudios:
+    (materias, estados_map, correlativas_map)
+    - materias: [(id, nombre, anio, cuatrimestre, final_obligatorio, es_electiva), ...]
+    - estados_map: {materia_id: estado} — estado del alumno para cada materia
+    - correlativas_map: {materia_id: [(requiere_materia_id, requiere_nombre), ...]}
+    """
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            # ── Materias de la carrera ───────────────────────────────────
+            cur.execute("""
+                SELECT id, nombre, anio, cuatrimestre, final_obligatorio, es_electiva
+                FROM materias
+                WHERE carrera_id = %s
+                ORDER BY anio, cuatrimestre, nombre;
+            """, (carrera_id,))
+            materias = cur.fetchall()
+
+            # ── Estado del alumno por materia ────────────────────────────
+            cur.execute("""
+                SELECT materia_id, estado
+                FROM alumno_materias
+                WHERE usuario_id = %s;
+            """, (usuario_id,))
+            estados_map = {r[0]: r[1] for r in cur.fetchall()}
+
+            # ── Correlativas de toda la carrera ──────────────────────────
+            cur.execute("""
+                SELECT co.materia_id, r.id, r.nombre
+                FROM correlatividades co
+                JOIN materias m ON m.id = co.materia_id
+                JOIN materias r ON r.id = co.requiere_materia_id
+                WHERE m.carrera_id = %s
+                ORDER BY r.anio, r.nombre;
+            """, (carrera_id,))
+            correlativas_map = {}
+            for materia_id, requiere_id, requiere_nombre in cur.fetchall():
+                correlativas_map.setdefault(materia_id, []).append((requiere_id, requiere_nombre))
+
+    return materias, estados_map, correlativas_map
+
 # ─── Backup de la base de datos (ítem prioridad alta, 09/08/2026) ──────────
 # Dos formatos, ambos generados en Python puro (sin pg_dump, que no está
 # garantizado en Streamlit Community Cloud):

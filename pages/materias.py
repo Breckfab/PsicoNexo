@@ -1,5 +1,5 @@
 import streamlit as st
-from db import get_conn, get_home_data_completo
+from db import get_conn, get_materias_data_completo, get_home_data_completo
 from utils import NOMBRES_ANIO
 
 ESTADOS = ["pendiente", "cursando", "regular", "aprobada", "desaprobada", "promocionada"]
@@ -14,55 +14,6 @@ ESTADO_LABELS = {
 }
 
 ESTADOS_APROBADOS = ("aprobada", "promocionada")
-
-
-@st.cache_data(ttl=60)
-def get_materias_carrera(carrera_id):
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute("""
-                SELECT id, nombre, anio, cuatrimestre, final_obligatorio, es_electiva
-                FROM materias
-                WHERE carrera_id = %s
-                ORDER BY anio, cuatrimestre, nombre;
-            """, (carrera_id,))
-            return cur.fetchall()
-
-
-@st.cache_data(ttl=60)
-def get_estados_alumno(usuario_id):
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute("""
-                SELECT materia_id, estado
-                FROM alumno_materias
-                WHERE usuario_id = %s;
-            """, (usuario_id,))
-            return {r[0]: r[1] for r in cur.fetchall()}
-
-
-@st.cache_data(ttl=300)
-def get_correlativas_carrera(carrera_id):
-    """
-    Devuelve {materia_id: [(requiere_materia_id, requiere_nombre), ...]} con
-    las correlatividades de todas las materias de la carrera. TTL largo
-    porque esto casi nunca cambia (se carga una sola vez en seed_materias.py).
-    """
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute("""
-                SELECT co.materia_id, r.id, r.nombre
-                FROM correlatividades co
-                JOIN materias m ON m.id = co.materia_id
-                JOIN materias r ON r.id = co.requiere_materia_id
-                WHERE m.carrera_id = %s
-                ORDER BY r.anio, r.nombre;
-            """, (carrera_id,))
-            rows = cur.fetchall()
-    resultado = {}
-    for materia_id, requiere_id, requiere_nombre in rows:
-        resultado.setdefault(materia_id, []).append((requiere_id, requiere_nombre))
-    return resultado
 
 
 def actualizar_estado_materia(usuario_id, materia_id, nuevo_estado):
@@ -81,7 +32,7 @@ def actualizar_estado_materia(usuario_id, materia_id, nuevo_estado):
                 DO UPDATE SET estado = EXCLUDED.estado;
             """, (usuario_id, materia_id, nuevo_estado))
         conn.commit()
-    get_estados_alumno.clear()
+    get_materias_data_completo.clear()
     get_home_data_completo.clear()
 
 
@@ -178,13 +129,17 @@ def mostrar(usuario):
     st.title("📚 Plan de Estudios")
     st.caption("Marcá el estado de cada materia a medida que avanzás en la carrera. Las correlativas se validan automáticamente.")
 
-    materias = get_materias_carrera(usuario["carrera_id"])
+    # ── Batch único de la pantalla (ítem prioridad alta, latencia de carga,
+    # 13/08/2026): antes eran 3 conexiones fijas al pool (materias de la
+    # carrera, estados del alumno, correlativas). Ahora es 1 sola — ver
+    # get_materias_data_completo en db.py.
+    materias, estados_map, correlativas_map = get_materias_data_completo(
+        usuario["id"], usuario["carrera_id"]
+    )
+
     if not materias:
         st.warning("No hay materias cargadas para tu carrera todavía.")
         return
-
-    estados_map = get_estados_alumno(usuario["id"])
-    correlativas_map = get_correlativas_carrera(usuario["carrera_id"])
 
     total = len(materias)
     aprobadas = sum(1 for m in materias if estados_map.get(m[0], "pendiente") in ESTADOS_APROBADOS)

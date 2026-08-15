@@ -4,21 +4,49 @@ from utils import NOMBRES_ANIO
 
 VALORACIONES = ["Recomendado", "No recomendado"]
 
+# ─── Batch único de la pantalla (ítem prioridad alta, "Seguir optimizando
+# latencia", 14/08/2026) ────────────────────────────────────────────────────
+# Antes: 3 conexiones fijas al pool en cada carga (get_todas_materias,
+# get_opiniones, get_recomendaciones_terceros). Con st.tabs las tres se
+# disparan igual en cada rerun aunque el alumno esté mirando una sola tab
+# (Streamlit ejecuta el contenido de las 3 tabs siempre, no solo la visible
+# — eso es una limitación del componente en sí, no se resuelve batcheando).
+# Lo que sí se puede evitar es que cada una de las 3 queries abra su propia
+# conexión al pool: se consolidan acá en una sola conexión, mismo criterio
+# que el resto del proyecto (Home, Plan de Estudios, tab "Cursando
+# actualmente", Estadísticas) — en Neon serverless el costo real es el
+# round-trip de adquirir la conexión, no las queries en sí.
+#
+# Reemplaza a las 3 funciones cacheadas viejas (get_todas_materias,
+# get_opiniones, get_recomendaciones_terceros), eliminadas porque no las
+# usaba ningún otro módulo fuera de esta pantalla.
+#
+# Invalidación de caché: agregar_opinion/actualizar_opinion/eliminar_opinion
+# y agregar_recomendacion_tercero/actualizar_recomendacion_tercero/
+# eliminar_recomendacion_tercero limpian este caché (ver más abajo).
+
 @st.cache_data(ttl=60)
-def get_todas_materias(carrera_id):
+def get_profesores_data_completo(usuario_id, carrera_id):
+    """
+    Devuelve, en una sola conexión, todo lo que necesita pages/profesores.py:
+    (todas_materias, opiniones, recomendaciones_terceros)
+    - todas_materias: [(id, nombre, anio), ...]
+    - opiniones: [(id, profesor, valoracion, observaciones, materia_nombre, materia_anio), ...]
+    - recomendaciones_terceros: [(id, apellido, nombre, valoracion, observaciones,
+      cargado_por, cargado_por_nombre, materia_ids, materia_nombres, materia_anios), ...]
+    Mismo formato de fila que devolvían las 3 funciones originales.
+    """
     with get_conn() as conn:
         with conn.cursor() as cur:
+            # ── Todas las materias de la carrera (para los selectores) ───
             cur.execute("""
                 SELECT id, nombre, anio FROM materias
                 WHERE carrera_id = %s
                 ORDER BY anio, nombre;
             """, (carrera_id,))
-            return cur.fetchall()
+            todas_materias = cur.fetchall()
 
-@st.cache_data(ttl=60)
-def get_opiniones(usuario_id):
-    with get_conn() as conn:
-        with conn.cursor() as cur:
+            # ── Opiniones propias del alumno (privadas) ──────────────────
             cur.execute("""
                 SELECT op.id, op.profesor, op.valoracion, op.observaciones, m.nombre, m.anio
                 FROM opiniones_profesores op
@@ -26,48 +54,9 @@ def get_opiniones(usuario_id):
                 WHERE op.usuario_id = %s
                 ORDER BY op.profesor, m.anio, m.nombre;
             """, (usuario_id,))
-            return cur.fetchall()
+            opiniones = cur.fetchall()
 
-def agregar_opinion(usuario_id, materia_id, profesor, valoracion, observaciones):
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute("""
-                INSERT INTO opiniones_profesores (usuario_id, materia_id, profesor, valoracion, observaciones)
-                VALUES (%s, %s, %s, %s, %s);
-            """, (usuario_id, materia_id, profesor, valoracion, observaciones))
-        conn.commit()
-    get_opiniones.clear()
-
-def actualizar_opinion(opinion_id, valoracion, observaciones):
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute("""
-                UPDATE opiniones_profesores SET valoracion = %s, observaciones = %s
-                WHERE id = %s;
-            """, (valoracion, observaciones, opinion_id))
-        conn.commit()
-    get_opiniones.clear()
-
-def eliminar_opinion(opinion_id):
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute("DELETE FROM opiniones_profesores WHERE id = %s;", (opinion_id,))
-        conn.commit()
-    get_opiniones.clear()
-
-# ─── Profesores recomendados por terceros ───────────────────────────────────
-# A diferencia de opiniones_profesores (privada, un alumno opina de una
-# materia que él mismo cursó), esta sección es COMPARTIDA entre todos los
-# alumnos de la carrera: sirve para cargar profesores de los que un alumno
-# se enteró por un tercero, sin haber cursado él mismo con ellos. Un mismo
-# profesor puede dictar hasta 5 materias, guardadas en la tabla puente
-# recomendaciones_terceros_materias. Solo quien cargó una recomendación
-# puede editarla o borrarla (agregado 29/07/2026).
-
-@st.cache_data(ttl=60)
-def get_recomendaciones_terceros(carrera_id):
-    with get_conn() as conn:
-        with conn.cursor() as cur:
+            # ── Recomendaciones de terceros (compartidas por carrera) ────
             cur.execute("""
                 SELECT rt.id, rt.apellido, rt.nombre, rt.valoracion, rt.observaciones,
                        rt.cargado_por, u.nombre AS cargado_por_nombre,
@@ -83,7 +72,45 @@ def get_recomendaciones_terceros(carrera_id):
                          rt.cargado_por, u.nombre
                 ORDER BY rt.apellido, rt.nombre;
             """, (carrera_id,))
-            return cur.fetchall()
+            recomendaciones_terceros = cur.fetchall()
+
+    return todas_materias, opiniones, recomendaciones_terceros
+
+def agregar_opinion(usuario_id, materia_id, profesor, valoracion, observaciones):
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO opiniones_profesores (usuario_id, materia_id, profesor, valoracion, observaciones)
+                VALUES (%s, %s, %s, %s, %s);
+            """, (usuario_id, materia_id, profesor, valoracion, observaciones))
+        conn.commit()
+    get_profesores_data_completo.clear()
+
+def actualizar_opinion(opinion_id, valoracion, observaciones):
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                UPDATE opiniones_profesores SET valoracion = %s, observaciones = %s
+                WHERE id = %s;
+            """, (valoracion, observaciones, opinion_id))
+        conn.commit()
+    get_profesores_data_completo.clear()
+
+def eliminar_opinion(opinion_id):
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM opiniones_profesores WHERE id = %s;", (opinion_id,))
+        conn.commit()
+    get_profesores_data_completo.clear()
+
+# ─── Profesores recomendados por terceros ───────────────────────────────────
+# A diferencia de opiniones_profesores (privada, un alumno opina de una
+# materia que él mismo cursó), esta sección es COMPARTIDA entre todos los
+# alumnos de la carrera: sirve para cargar profesores de los que un alumno
+# se enteró por un tercero, sin haber cursado él mismo con ellos. Un mismo
+# profesor puede dictar hasta 5 materias, guardadas en la tabla puente
+# recomendaciones_terceros_materias. Solo quien cargó una recomendación
+# puede editarla o borrarla (agregado 29/07/2026).
 
 def agregar_recomendacion_tercero(usuario_id, apellido, nombre, valoracion, observaciones, materia_ids):
     with get_conn() as conn:
@@ -101,7 +128,7 @@ def agregar_recomendacion_tercero(usuario_id, apellido, nombre, valoracion, obse
                     ON CONFLICT (recomendacion_id, materia_id) DO NOTHING;
                 """, (recomendacion_id, materia_id))
         conn.commit()
-    get_recomendaciones_terceros.clear()
+    get_profesores_data_completo.clear()
 
 def actualizar_recomendacion_tercero(recomendacion_id, apellido, nombre, valoracion, observaciones, materia_ids):
     with get_conn() as conn:
@@ -119,14 +146,14 @@ def actualizar_recomendacion_tercero(recomendacion_id, apellido, nombre, valorac
                     ON CONFLICT (recomendacion_id, materia_id) DO NOTHING;
                 """, (recomendacion_id, materia_id))
         conn.commit()
-    get_recomendaciones_terceros.clear()
+    get_profesores_data_completo.clear()
 
 def eliminar_recomendacion_tercero(recomendacion_id):
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute("DELETE FROM recomendaciones_terceros WHERE id = %s;", (recomendacion_id,))
         conn.commit()
-    get_recomendaciones_terceros.clear()
+    get_profesores_data_completo.clear()
 
 def mostrar(usuario):
     if not usuario:
@@ -136,6 +163,15 @@ def mostrar(usuario):
     st.title("⭐ Opiniones de Profesores")
     st.caption("Tus opiniones son privadas y solo las ves vos.")
 
+    # ── Batch único de la pantalla (ítem prioridad alta, latencia de carga,
+    # 14/08/2026): antes eran 3 conexiones fijas al pool (todas_materias,
+    # opiniones, recomendaciones_terceros). Ahora es 1 sola — ver
+    # get_profesores_data_completo más arriba.
+    todas, opiniones_todas, recomendaciones = get_profesores_data_completo(
+        usuario["id"], usuario["carrera_id"]
+    )
+    opciones = {f"{NOMBRES_ANIO.get(m[2], '')} — {m[1]}": m[0] for m in todas}
+
     tab1, tab2, tab3 = st.tabs([
         "📋 Mis opiniones",
         "➕ Agregar opinión",
@@ -143,7 +179,7 @@ def mostrar(usuario):
     ])
 
     with tab1:
-        opiniones = get_opiniones(usuario["id"])
+        opiniones = opiniones_todas
 
         if not opiniones:
             st.info("Todavía no cargaste ninguna opinión.")
@@ -229,9 +265,6 @@ def mostrar(usuario):
                         st.markdown("---")
 
     with tab2:
-        todas = get_todas_materias(usuario["carrera_id"])
-        opciones = {f"{NOMBRES_ANIO.get(m[2], '')} — {m[1]}": m[0] for m in todas}
-
         opciones_lista = ["Elegí una materia"] + list(opciones.keys())
 
         if "form_opinion_key" not in st.session_state:
@@ -274,8 +307,7 @@ def mostrar(usuario):
             "que te enteraste por un tercero (no cursaste vos mismo/a con ellos)."
         )
 
-        todas_mat = get_todas_materias(usuario["carrera_id"])
-        opciones_mat = {f"{NOMBRES_ANIO.get(m[2], '')} — {m[1]}": m[0] for m in todas_mat}
+        opciones_mat = opciones
         opciones_mat_lista = ["—"] + list(opciones_mat.keys())
 
         if "form_terceros_key" not in st.session_state:
@@ -327,8 +359,6 @@ def mostrar(usuario):
                     st.rerun()
 
         st.markdown("---")
-
-        recomendaciones = get_recomendaciones_terceros(usuario["carrera_id"])
 
         if not recomendaciones:
             st.info("Todavía no hay recomendaciones de terceros cargadas.")

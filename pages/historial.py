@@ -9,8 +9,29 @@ from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.enums import TA_CENTER
 from utils import NOMBRES_ANIO, CUATRI_TEXTO, COLORES
 
+# ─── Batch único de la pantalla (ítem prioridad alta, "Seguir optimizando
+# latencia", 14/08/2026) ────────────────────────────────────────────────────
+# Antes: 2 conexiones fijas al pool en cada carga (get_historial y
+# get_nombre_usuario). La segunda solo se necesita para armar el
+# encabezado "Alumno/a: ..." del PDF, pero abría su propia conexión al
+# pool cada vez que había resultados para mostrar (el caso normal). Se
+# consolidan acá en una sola conexión, mismo criterio que el resto del
+# proyecto (Home, Plan de Estudios, tab "Cursando actualmente",
+# Estadísticas, Profesores).
+#
+# Reemplaza a las 2 funciones cacheadas viejas (get_historial,
+# get_nombre_usuario), eliminadas porque no las usaba ningún otro módulo
+# fuera de esta pantalla (estadisticas.py tiene su propia copia de
+# get_nombre_usuario, deliberadamente duplicada — ver comentario ahí — así
+# que no se toca).
+
 @st.cache_data(ttl=60)
-def get_historial(usuario_id, carrera_id):
+def get_historial_data_completo(usuario_id, carrera_id):
+    """
+    Devuelve, en una sola conexión, todo lo que necesita pages/historial.py:
+    (historial, nombre_alumno)
+    Mismo formato que devolvían get_historial() y get_nombre_usuario().
+    """
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute("""
@@ -28,15 +49,13 @@ def get_historial(usuario_id, carrera_id):
                          c.anio_cursada, c.cuatrimestre, c.profesor1
                 ORDER BY m.anio, m.cuatrimestre, m.nombre;
             """, (usuario_id, usuario_id, usuario_id, carrera_id))
-            return cur.fetchall()
+            historial = cur.fetchall()
 
-@st.cache_data(ttl=300)
-def get_nombre_usuario(usuario_id):
-    with get_conn() as conn:
-        with conn.cursor() as cur:
             cur.execute("SELECT nombre FROM usuarios WHERE id = %s;", (usuario_id,))
-            row = cur.fetchone()
-    return row[0] if row else "Alumno"
+            row_nombre = cur.fetchone()
+            nombre_alumno = row_nombre[0] if row_nombre else "Alumno"
+
+    return historial, nombre_alumno
 
 def generar_pdf(historial, nombre_alumno, filtros):
     buffer = BytesIO()
@@ -143,7 +162,11 @@ def mostrar(usuario):
     st.title("📜 Historial Académico")
     st.caption("Licenciatura en Psicología — UdeMM")
 
-    historial = get_historial(usuario["id"], usuario["carrera_id"])
+    # ── Batch único de la pantalla (ítem prioridad alta, latencia de carga,
+    # 14/08/2026): antes eran 2 conexiones fijas al pool (get_historial +
+    # get_nombre_usuario). Ahora es 1 sola — ver get_historial_data_completo
+    # más arriba.
+    historial, nombre_alumno = get_historial_data_completo(usuario["id"], usuario["carrera_id"])
 
     if not historial:
         st.info("Todavía no tenés materias con estado registrado.")
@@ -182,7 +205,6 @@ def mostrar(usuario):
         cant = len(resultado)
         st.markdown("**" + str(cant) + " materia" + ("s" if cant > 1 else "") + " encontrada" + ("s" if cant > 1 else "") + "**")
     with col_pdf:
-        nombre_alumno = get_nombre_usuario(usuario["id"])
         filtros = {"estado": filtro_estado, "anio": filtro_anio, "cuatri": filtro_cuatri}
         pdf_buffer = generar_pdf(resultado, nombre_alumno, filtros)
         st.download_button(

@@ -1,3 +1,5 @@
+# cursadas.py
+
 import streamlit as st
 from db import (
     get_conn, get_feriados, get_clases_hoy, get_historial_comisiones, get_periodos_comision,
@@ -930,7 +932,7 @@ def mostrar(usuario):
         st.switch_page("app.py")
         return
 
-    st.title("🗓️ Cursadas")
+    st.title("🗓️ MATERIAS")
 
     clases_hoy = get_clases_hoy(usuario["id"])
     if clases_hoy:

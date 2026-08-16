@@ -932,7 +932,7 @@ def mostrar(usuario):
         st.switch_page("app.py")
         return
 
-    st.title("🗓️ MATERIAS")
+    st.title("🗓️ Materias")
 
     clases_hoy = get_clases_hoy(usuario["id"])
     if clases_hoy:

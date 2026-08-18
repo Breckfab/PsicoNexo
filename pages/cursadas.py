@@ -563,10 +563,18 @@ def guardar_tarea(usuario_id, materia_id, numero, descripcion, fecha_vencimiento
     get_home_data_completo.clear()
 
 def actualizar_tarea(tarea_id, descripcion, fecha_vencimiento, completada):
+    """
+    Al editar una tarea se resetea `recordatorio_enviado_at` (ítem
+    "Recordatorios de tareas por email", 17/08/2026): si el alumno cambió
+    la fecha de vencimiento, el recordatorio viejo ya no aplica y conviene
+    que el script de recordatorios pueda volver a avisarle para la fecha
+    nueva, en vez de quedar marcada como "ya avisada" para siempre.
+    """
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute("""
-                UPDATE tareas SET descripcion = %s, fecha_vencimiento = %s, completada = %s
+                UPDATE tareas SET descripcion = %s, fecha_vencimiento = %s, completada = %s,
+                       recordatorio_enviado_at = NULL
                 WHERE id = %s;
             """, (descripcion, fecha_vencimiento, completada, tarea_id))
         conn.commit()

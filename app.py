@@ -1,14 +1,27 @@
+# app.py
+
+import os
 import streamlit as st
 from db import (
     init_db, crear_admin_si_no_existe, get_uso_almacenamiento, NEON_STORAGE_LIMIT_BYTES,
     generar_backup_sql, generar_backup_csv_zip, restaurar_backup_sql,
 )
-from auth import login_user, register_user, logout, get_carreras, generar_codigo, get_codigos
+from auth import (
+    login_user, register_user, logout, get_carreras, generar_codigo, get_codigos,
+    solicitar_recuperacion, resetear_password,
+)
 import calendar
 from datetime import datetime
 from pages import home, materias, cursadas, evaluaciones, recursos, profesores, estadisticas, perfil
 
 st.set_page_config(page_title="PsicoNexo", page_icon="Psicologia_favicon_png.png", layout="wide")
+
+# ─── Recuperación de contraseña (ítem prioridad alta, 17/08/2026) ──────────
+# URL pública de la app, usada para armar el link que se manda por email.
+# Configurar en las Secrets de Streamlit Community Cloud (o en .env local)
+# como APP_BASE_URL, ej. "https://psiconexo.streamlit.app". Si no está
+# configurada, se usa localhost como fallback para no romper en desarrollo.
+APP_BASE_URL = os.environ.get("APP_BASE_URL", "http://localhost:8501")
 
 if "usuario" not in st.session_state or st.session_state.usuario is None:
     st.markdown("""
@@ -54,6 +67,80 @@ def mostrar_login():
         if st.button("¿No tenés cuenta? Registrate", use_container_width=True):
             st.session_state.pagina = "registro"
             st.rerun()
+        if st.button("¿Olvidaste tu contraseña?", use_container_width=True):
+            st.session_state.pagina = "recuperar"
+            st.rerun()
+
+def mostrar_recuperar_password():
+    """
+    Pantalla para solicitar el link de recuperación de contraseña por
+    email (ítem prioridad alta, 17/08/2026). El envío en sí lo hace
+    auth.solicitar_recuperacion(), que arma el link con APP_BASE_URL y lo
+    manda vía Resend (emails.py).
+    """
+    col1, col2, col3 = st.columns([2, 1, 2])
+    with col2:
+        st.image("PsicoNexo_png.png", width=150)
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
+        st.subheader("Recuperar contraseña")
+        st.caption("Ingresá tu email y te mandamos un link para elegir una nueva contraseña.")
+        with st.form("form_recuperar"):
+            email_recuperar = st.text_input("Email")
+            submit_recuperar = st.form_submit_button("Enviar link de recuperación", use_container_width=True)
+        if submit_recuperar:
+            if not email_recuperar.strip():
+                st.error("Ingresá tu email.")
+            else:
+                with st.spinner("Enviando..."):
+                    ok, msg = solicitar_recuperacion(email_recuperar.strip(), APP_BASE_URL)
+                if ok:
+                    st.success(msg)
+                else:
+                    st.error(msg)
+        st.markdown("---")
+        if st.button("← Volver al login", use_container_width=True, key="btn_volver_login_recuperar"):
+            st.session_state.pagina = "login"
+            st.rerun()
+
+def mostrar_reset_password(token):
+    """
+    Pantalla de "elegir nueva contraseña", a la que se llega desde el link
+    del email de recuperación (?reset_token=... en la URL). El token se
+    valida recién al confirmar el formulario, en resetear_password() —
+    acá no se valida antes para no gastar una consulta a la base en cada
+    rerun de Streamlit mientras el alumno todavía está escribiendo.
+    """
+    col1, col2, col3 = st.columns([2, 1, 2])
+    with col2:
+        st.image("PsicoNexo_png.png", width=150)
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
+        st.subheader("Elegí tu nueva contraseña")
+        with st.form("form_reset_password"):
+            nueva = st.text_input("Nueva contraseña", type="password")
+            nueva2 = st.text_input("Repetir nueva contraseña", type="password")
+            submit_reset = st.form_submit_button("Guardar nueva contraseña", use_container_width=True)
+        if submit_reset:
+            if not nueva or not nueva2:
+                st.error("Completá los dos campos.")
+            elif nueva != nueva2:
+                st.error("Las contraseñas no coinciden.")
+            else:
+                ok, msg = resetear_password(token, nueva)
+                if ok:
+                    st.success(msg)
+                    st.query_params.clear()
+                    if st.button("Ir al login", use_container_width=True):
+                        st.session_state.pagina = "login"
+                        st.rerun()
+                else:
+                    st.error(msg)
+                    st.markdown("---")
+                    if st.button("Pedir un link nuevo", use_container_width=True):
+                        st.query_params.clear()
+                        st.session_state.pagina = "recuperar"
+                        st.rerun()
 
 def mostrar_registro():
     col1, col2, col3 = st.columns([2, 1, 2])
@@ -524,9 +611,19 @@ def mostrar_app():
         home.mostrar(usuario)
 
 # ── Punto de entrada principal ─────────────────────────────────────────────
-if st.session_state.usuario is None:
+# El link del email de recuperación llega con ?reset_token=... en la URL:
+# se chequea ANTES que el resto del enrutamiento (incluso con sesión
+# iniciada), porque alguien puede pedir el link estando logueado en otra
+# pestaña/dispositivo.
+_reset_token = st.query_params.get("reset_token")
+
+if _reset_token:
+    mostrar_reset_password(_reset_token)
+elif st.session_state.usuario is None:
     if st.session_state.pagina == "registro":
         mostrar_registro()
+    elif st.session_state.pagina == "recuperar":
+        mostrar_recuperar_password()
     else:
         mostrar_login()
 else:

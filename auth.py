@@ -1,11 +1,18 @@
+# auth.py
+
 import bcrypt
 import streamlit as st
 from db import get_conn
 import secrets
+from datetime import datetime, timedelta
+from emails import enviar_email_recuperacion
 
 # ─── Rate limiting de login ─────────────────────────────────────────────────
 MAX_INTENTOS_FALLIDOS = 5
 VENTANA_MINUTOS = 15
+
+# ─── Recuperación de contraseña (ítem prioridad alta, 17/08/2026) ──────────
+TOKEN_RESET_VENCE_MINUTOS = 60
 
 def hash_password(password):
     return bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
@@ -142,3 +149,109 @@ def get_codigos(admin_id):
                 ORDER BY c.created_at DESC;
             """, (admin_id,))
             return cur.fetchall()
+
+# ─── Recuperación de contraseña (ítem prioridad alta, 17/08/2026) ──────────
+# Flujo: el alumno pide recuperación con su email → se genera un token de un
+# solo uso con vencimiento de 1 hora → se manda por email (vía Resend, ver
+# emails.py) un link a la app con el token como query param
+# (?reset_token=...) → app.py detecta ese query param y muestra el
+# formulario de nueva contraseña → al confirmar, se valida el token acá y
+# se actualiza el hash.
+#
+# Deliberadamente NO se le informa al usuario si el email existe o no en la
+# base (mensaje siempre igual, "Si el email existe..."), para no filtrar
+# qué emails están registrados en el sistema a quien esté probando.
+
+def solicitar_recuperacion(email, base_url):
+    """
+    Genera un token de recuperación para `email` (si existe un usuario con
+    ese email) y le manda el link de reseteo por email. `base_url` es la
+    URL pública de la app (ej. "https://psiconexo.streamlit.app"), para
+    armar el link completo.
+
+    Devuelve siempre (True, mensaje_generico) salvo error real al mandar el
+    email de un usuario que sí existe — así no se filtra si el email está
+    registrado o no.
+    """
+    email_norm = email.lower().strip()
+    mensaje_generico = (
+        "Si el email está registrado, te mandamos un link para restablecer "
+        "tu contraseña. Revisá tu bandeja de entrada (y la carpeta de spam)."
+    )
+
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT id, nombre FROM usuarios WHERE email = %s;", (email_norm,))
+            user = cur.fetchone()
+
+    if not user:
+        # No existe el usuario: devolvemos el mismo mensaje genérico, sin
+        # generar token ni mandar nada, para no filtrar qué emails existen.
+        return True, mensaje_generico
+
+    usuario_id, nombre = user
+    token = secrets.token_urlsafe(32)
+    expira = datetime.now() + timedelta(minutes=TOKEN_RESET_VENCE_MINUTOS)
+
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO password_reset_tokens (usuario_id, token, expires_at)
+                VALUES (%s, %s, %s);
+            """, (usuario_id, token, expira))
+        conn.commit()
+
+    link_reset = f"{base_url.rstrip('/')}/?reset_token={token}"
+    ok_envio, msg_envio = enviar_email_recuperacion(email_norm, nombre, link_reset)
+
+    if not ok_envio:
+        # El token ya quedó guardado en la base igual (no hace daño), pero
+        # avisamos del error real de envío en vez del mensaje genérico, para
+        # que quede claro que algo falló del lado del proveedor de email
+        # (útil sobre todo en desarrollo, mientras se prueba la integración).
+        return False, f"No se pudo enviar el email de recuperación: {msg_envio}"
+
+    return True, mensaje_generico
+
+def verificar_token_reset(token):
+    """
+    Devuelve (usuario_id, nombre) si el token es válido (existe, no usado,
+    no vencido), o None si no lo es.
+    """
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT p.usuario_id, u.nombre
+                FROM password_reset_tokens p
+                JOIN usuarios u ON u.id = p.usuario_id
+                WHERE p.token = %s AND p.usado = FALSE AND p.expires_at > NOW();
+            """, (token,))
+            row = cur.fetchone()
+    return row
+
+def resetear_password(token, nueva_password):
+    """
+    Valida el token y, si es válido, actualiza la contraseña del usuario y
+    marca el token como usado (para que no se pueda reutilizar el mismo
+    link). Devuelve (ok: bool, mensaje: str).
+    """
+    datos = verificar_token_reset(token)
+    if not datos:
+        return False, "Este link ya no es válido. Puede haber vencido o ya haber sido usado — pedí uno nuevo."
+
+    usuario_id, _nombre = datos
+    password_hash = hash_password(nueva_password)
+
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE usuarios SET password_hash = %s WHERE id = %s;",
+                (password_hash, usuario_id)
+            )
+            cur.execute(
+                "UPDATE password_reset_tokens SET usado = TRUE WHERE token = %s;",
+                (token,)
+            )
+        conn.commit()
+
+    return True, "Contraseña actualizada correctamente. Ya podés iniciar sesión."

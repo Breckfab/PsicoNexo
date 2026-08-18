@@ -1,0 +1,48 @@
+ .github/workflows/recordatorios.yml
+
+# Corre enviar_recordatorios.py una vez al día. GitHub Actions es lo que
+# reemplaza al cron que Streamlit Community Cloud no ofrece (ítem
+# "Recordatorios de tareas por email", prioridad alta, 17/08/2026).
+#
+# Configuración necesaria ANTES de que esto funcione (una sola vez):
+#   Settings del repo → Secrets and variables → Actions → New repository secret
+#     DATABASE_URL     = la misma URL de conexión de Neon que usa la app
+#     RESEND_API_KEY   = la API key de resend.com/api-keys
+#     EMAIL_FROM       = el remitente verificado en Resend
+#
+# El horario está en UTC: 12:00 UTC = 09:00 en Argentina (UTC-3). Ajustar
+# el cron si se quiere otro horario — GitHub Actions no soporta zonas
+# horarias directamente en el cron.
+#
+# workflow_dispatch permite además dispararlo a mano desde la pestaña
+# "Actions" del repo, útil para probar sin esperar al horario programado.
+
+name: Recordatorios de tareas
+
+on:
+  schedule:
+    - cron: "0 12 * * *"
+  workflow_dispatch:
+
+jobs:
+  enviar-recordatorios:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout del repo
+        uses: actions/checkout@v4
+
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Instalar dependencias
+        run: pip install "psycopg[binary]" requests
+
+      - name: Ejecutar script de recordatorios
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
+        run: python enviar_recordatorios.py
+

@@ -1,3 +1,5 @@
+# db.py
+
 import os
 import re
 import csv
@@ -262,6 +264,15 @@ def init_db():
         );
     """)
 
+    # Recordatorios de tareas por email (ítem prioridad alta, 17/08/2026):
+    # marca cuándo se le mandó al alumno el recordatorio de una tarea, para
+    # que el script de recordatorios (enviar_recordatorios.py, corrido una
+    # vez al día vía GitHub Actions) no le mande el mismo recordatorio más
+    # de una vez. NULL = todavía no se mandó recordatorio para esa tarea.
+    cur.execute("""
+        ALTER TABLE tareas ADD COLUMN IF NOT EXISTS recordatorio_enviado_at TIMESTAMP;
+    """)
+
     cur.execute("""
         CREATE TABLE IF NOT EXISTS asistencias (
             id SERIAL PRIMARY KEY,
@@ -367,6 +378,29 @@ def init_db():
     cur.execute("""
         CREATE INDEX IF NOT EXISTS idx_intentos_login_email_fecha
         ON intentos_login (email, created_at);
+    """)
+
+    # ── Recuperación de contraseña (ítem prioridad alta, 17/08/2026) ───────
+    # Un token de un solo uso por solicitud, con vencimiento corto (1 hora,
+    # ver GENERAR_TOKEN_RESET_VENCE_MINUTOS en auth.py). "usado" evita que
+    # el mismo link se reutilice una vez ya cambiada la contraseña; el
+    # vencimiento evita que un link viejo (por ejemplo reenviado sin
+    # querer, o encontrado en un email guardado) siga siendo válido
+    # indefinidamente.
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS password_reset_tokens (
+            id SERIAL PRIMARY KEY,
+            usuario_id INTEGER REFERENCES usuarios(id),
+            token TEXT UNIQUE NOT NULL,
+            usado BOOLEAN DEFAULT FALSE,
+            created_at TIMESTAMP DEFAULT NOW(),
+            expires_at TIMESTAMP NOT NULL
+        );
+    """)
+
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_password_reset_tokens_token
+        ON password_reset_tokens (token);
     """)
 
     cur.execute("""

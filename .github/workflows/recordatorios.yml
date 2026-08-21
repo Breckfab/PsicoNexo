@@ -1,22 +1,3 @@
- .github/workflows/recordatorios.yml
-
-# Corre enviar_recordatorios.py una vez al día. GitHub Actions es lo que
-# reemplaza al cron que Streamlit Community Cloud no ofrece (ítem
-# "Recordatorios de tareas por email", prioridad alta, 17/08/2026).
-#
-# Configuración necesaria ANTES de que esto funcione (una sola vez):
-#   Settings del repo → Secrets and variables → Actions → New repository secret
-#     DATABASE_URL     = la misma URL de conexión de Neon que usa la app
-#     RESEND_API_KEY   = la API key de resend.com/api-keys
-#     EMAIL_FROM       = el remitente verificado en Resend
-#
-# El horario está en UTC: 12:00 UTC = 09:00 en Argentina (UTC-3). Ajustar
-# el cron si se quiere otro horario — GitHub Actions no soporta zonas
-# horarias directamente en el cron.
-#
-# workflow_dispatch permite además dispararlo a mano desde la pestaña
-# "Actions" del repo, útil para probar sin esperar al horario programado.
-
 name: Recordatorios de tareas
 
 on:
@@ -45,4 +26,3 @@ jobs:
           RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
           EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
         run: python enviar_recordatorios.py
-

@@ -135,24 +135,8 @@ def enviar_email_recuperacion(destinatario, nombre, link_reset):
     return enviar_email(destinatario, "PsicoNexo — Recuperación de contraseña", html)
 
 
-def enviar_email_recordatorio_tarea(destinatario, nombre, materia_nombre, numero, descripcion, fecha_vencimiento):
-    """
-    Arma y envía el email de recordatorio de una tarea próxima a vencer.
-    Usado por el script de recordatorios (ver comentario en auth.py /
-    Mejoras Pendientes sobre cómo se dispara este envío).
-    """
-    desc_texto = descripcion or "Sin descripción"
-    cuerpo = f"""
-        <p>Hola {nombre},</p>
-        <p>Te recordamos que tenés una tarea próxima a vencer:</p>
-        <div style="background-color:#2a2a3e; border-radius:8px; padding:14px 18px; margin:16px 0;">
-            <p style="margin:0 0 6px 0;"><strong>Materia:</strong> {materia_nombre}</p>
-            <p style="margin:0 0 6px 0;"><strong>Tarea {numero}:</strong> {desc_texto}</p>
-            <p style="margin:0; color:#e74c3c;"><strong>Vence:</strong> {fecha_vencimiento.strftime('%d/%m/%Y')}</p>
-        </div>
-        <p>Entrá a PsicoNexo para marcarla como completada o revisar el detalle.</p>
-    """
-    html = _layout_email("📌 Recordatorio de tarea", cuerpo)
-    return enviar_email(
-        destinatario, f"PsicoNexo — Recordatorio: {materia_nombre} vence pronto", html
-    )
+# Recordatorios de tareas por email: funcionalidad dada de baja (23/08/2026,
+# "no son necesarios"). La función enviar_email_recordatorio_tarea() se
+# sacó de acá junto con enviar_recordatorios.py y el workflow de GitHub
+# Actions. enviar_email() y _layout_email() (arriba) se mantienen tal cual,
+# porque los sigue usando la recuperación de contraseña (auth.py).

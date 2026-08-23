@@ -264,13 +264,13 @@ def init_db():
         );
     """)
 
-    # Recordatorios de tareas por email (ítem prioridad alta, 17/08/2026):
-    # marca cuándo se le mandó al alumno el recordatorio de una tarea, para
-    # que el script de recordatorios (enviar_recordatorios.py, corrido una
-    # vez al día vía GitHub Actions) no le mande el mismo recordatorio más
-    # de una vez. NULL = todavía no se mandó recordatorio para esa tarea.
+    # Recordatorios de tareas por email: funcionalidad dada de baja
+    # (23/08/2026, "no son necesarios"). La columna recordatorio_enviado_at
+    # se borra acá si todavía existe en la base viva, para no dejar basura
+    # sin uso. Si nunca llegó a crearse (bases nuevas), el DROP COLUMN IF
+    # EXISTS no hace nada.
     cur.execute("""
-        ALTER TABLE tareas ADD COLUMN IF NOT EXISTS recordatorio_enviado_at TIMESTAMP;
+        ALTER TABLE tareas DROP COLUMN IF EXISTS recordatorio_enviado_at;
     """)
 
     cur.execute("""

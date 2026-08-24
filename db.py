@@ -264,15 +264,6 @@ def init_db():
         );
     """)
 
-    # Recordatorios de tareas por email: funcionalidad dada de baja
-    # (23/08/2026, "no son necesarios"). La columna recordatorio_enviado_at
-    # se borra acá si todavía existe en la base viva, para no dejar basura
-    # sin uso. Si nunca llegó a crearse (bases nuevas), el DROP COLUMN IF
-    # EXISTS no hace nada.
-    cur.execute("""
-        ALTER TABLE tareas DROP COLUMN IF EXISTS recordatorio_enviado_at;
-    """)
-
     cur.execute("""
         CREATE TABLE IF NOT EXISTS asistencias (
             id SERIAL PRIMARY KEY,
@@ -413,12 +404,34 @@ def init_db():
     cur.close()
     conn.close()
 
+# ─── Alta del admin inicial (ítem prioridad alta, 23/08/2026) ─────────────
+# Antes la contraseña del admin estaba escrita en texto plano acá mismo
+# ("Seamist123**"), visible para cualquiera que mire el código en GitHub
+# (el repo es público). Ahora se lee desde ADMIN_INITIAL_PASSWORD, una
+# variable de entorno / Secret que solo vos ves — el mismo criterio que ya
+# se usa para DATABASE_URL, RESEND_API_KEY, etc.
+#
+# Esta función solo importa la PRIMERA vez que la app corre contra una base
+# nueva (mientras no exista el usuario admin). Una vez creado, cambiá la
+# contraseña desde tu perfil o directo en la base — ADMIN_INITIAL_PASSWORD
+# no se vuelve a usar después de esa primera vez.
 def crear_admin_si_no_existe():
     conn = get_connection()
     cur = conn.cursor()
     cur.execute("SELECT id FROM usuarios WHERE email = 'fabianbelledi@gmail.com';")
     if not cur.fetchone():
-        password_hash = bcrypt.hashpw("Seamist123**".encode(), bcrypt.gensalt()).decode()
+        password_inicial = os.environ.get("ADMIN_INITIAL_PASSWORD")
+        if not password_inicial:
+            # Sin la variable configurada no se crea el admin — mejor eso
+            # que insertar una contraseña por defecto predecible en el código.
+            print(
+                "ADVERTENCIA: falta configurar ADMIN_INITIAL_PASSWORD en las "
+                "Secrets. No se creó el usuario admin todavía."
+            )
+            cur.close()
+            conn.close()
+            return
+        password_hash = bcrypt.hashpw(password_inicial.encode(), bcrypt.gensalt()).decode()
         cur.execute("""
             INSERT INTO usuarios (email, password_hash, nombre, carrera_id, es_admin)
             VALUES ('fabianbelledi@gmail.com', %s, 'Admin', 1, TRUE);
@@ -464,18 +477,6 @@ def borrar_feriado(feriado_id):
     get_home_data_completo.clear()
 
 # ─── Clases de hoy ──────────────────────────────────────────────────────────
-# Antes estaba duplicada, con SQL casi idéntico, en cursadas.py y home.py
-# (ítem de prioridad media, "Revisar duplicación de queries entre cursadas.py
-# y home.py", 27/07/2026). Se centraliza acá con la versión que incluye
-# `turno`, que es la más completa de las dos. Los llamadores que no necesiten
-# el turno simplemente ignoran ese valor al desempaquetar la tupla.
-#
-# NOTA (12/08/2026): pages/home.py ya NO llama a esta función — su propio
-# batch (get_home_data_completo, más abajo) trae las clases de hoy con el
-# mismo SQL en la misma conexión que el resto de los datos de esa pantalla,
-# para no abrir una conexión extra. Esta función se mantiene tal cual porque
-# pages/cursadas.py sigue usándola.
-
 @st.cache_data(ttl=60)
 def get_clases_hoy(usuario_id):
     hoy = datetime.now()
@@ -494,19 +495,11 @@ def get_clases_hoy(usuario_id):
             return cur.fetchall()
 
 # ─── Comisiones (historial) ─────────────────────────────────────────────────
-# Centralizado acá porque lo usan tanto cursadas.py (formulario de cambio de
-# comisión y detalle de asistencia por materia) como home.py (cálculo de
-# asistencia multi-período en el dashboard) — mismo criterio que se usó para
-# get_clases_hoy (ítem #6 de "Cosas por Hacer", 02/08/2026).
-
 @st.cache_data(ttl=120)
 def get_historial_comisiones(cursada_id):
     """
     Períodos CERRADOS de comisión de una cursada (no incluye el vigente,
     que vive en cursadas.numero_comision / cursadas.fecha_desde_comision).
-    Devuelve [(id, numero_comision, turno, dias, horario, link,
-    profesor1, email_profesor1, profesor2, email_profesor2,
-    fecha_desde, fecha_hasta), ...] ordenado por fecha_desde.
     """
     with get_conn() as conn:
         with conn.cursor() as cur:
@@ -523,11 +516,7 @@ def get_historial_comisiones(cursada_id):
 def get_periodos_comision(cursada_id, dias_actual, fecha_desde_actual):
     """
     Arma la lista completa de períodos de comisión de una cursada (los
-    cerrados + el vigente), para que utils.contar_clases_multi_periodo()
-    pueda sumar las clases dictadas de cada tramo por separado:
-    [(dias_str, fecha_desde, fecha_hasta_o_None), ...]
-    El último período (comisión vigente) usa fecha_hasta=None, que se
-    interpreta como "hasta el fin del cuatrimestre configurado".
+    cerrados + el vigente).
     """
     historial = get_historial_comisiones(cursada_id)
     periodos = [(h[3], h[10], h[11]) for h in historial]
@@ -535,13 +524,6 @@ def get_periodos_comision(cursada_id, dias_actual, fecha_desde_actual):
     return periodos
 
 # ─── Uso de almacenamiento (Neon) ───────────────────────────────────────────
-# Usado por la sección "📦 Uso de almacenamiento (Neon)" del panel de
-# Administración (ítem nuevo, 08/08/2026). pg_database_size() devuelve el
-# tamaño real ocupado por la base en bytes; el % se calcula contra
-# NEON_STORAGE_LIMIT_BYTES (definido arriba). Cacheado 5 minutos: el tamaño
-# de la base no cambia lo suficientemente rápido como para justificar
-# consultarlo en cada rerun de Streamlit.
-
 @st.cache_data(ttl=300)
 def get_uso_almacenamiento():
     """Devuelve el tamaño actual de la base de datos, en bytes."""
@@ -550,32 +532,7 @@ def get_uso_almacenamiento():
             cur.execute("SELECT pg_database_size(current_database());")
             return cur.fetchone()[0]
 
-# ─── Batch principal de Home (ítem prioridad alta, latencia de carga,
-# 12/08/2026) ────────────────────────────────────────────────────────────
-# Antes, cargar Home abría 6 conexiones fijas al pool antes de poder pintar
-# nada: stats + configs (antes get_home_data, en home.py), materias
-# cursando + notas (antes get_materias_cursando_con_notas, en home.py),
-# faltas por materia (antes get_faltas_por_materia, en home.py), feriados
-# (antes get_feriados, acá arriba), tareas pendientes (antes
-# get_tareas_pendientes, en home.py) y clases de hoy (antes get_clases_hoy,
-# acá arriba). Se consolida todo en una sola conexión, mismo criterio que ya
-# se usa en get_cursadas_tab_data (cursadas.py) y
-# get_estadisticas_asistencia_data (estadisticas.py): en Neon serverless el
-# costo real es el round-trip de adquirir/chequear la conexión, no las
-# queries en sí — pedirla 1 vez en vez de 6 achica bastante la latencia de
-# la pantalla que más se visita.
-#
-# NOTA: duplica a propósito el SQL de get_feriados y get_clases_hoy (que
-# siguen existiendo tal cual, sin cambios, porque pages/cursadas.py las sigue
-# usando) en vez de llamarlas, para no abrir una conexión extra por cada una
-# — mismo criterio que ya usa get_cursadas_tab_data con sus propias tablas.
-#
-# Invalidación de caché: todas las funciones que escriben datos que esta
-# pantalla muestra (feriados, tareas, faltas, cursadas/comisiones, estado de
-# materias, evaluaciones/notas) limpian este caché además del suyo propio.
-# Ver agregar_feriado/borrar_feriado más arriba, y en pages/cursadas.py,
-# pages/materias.py y pages/evaluaciones.py.
-
+# ─── Batch principal de Home ────────────────────────────────────────────────
 @st.cache_data(ttl=60)
 def get_home_data_completo(usuario_id, carrera_id, anio_actual):
     """
@@ -590,7 +547,6 @@ def get_home_data_completo(usuario_id, carrera_id, anio_actual):
 
     with get_conn() as conn:
         with conn.cursor() as cur:
-            # ── Stats de avance de carrera ──────────────────────────────
             cur.execute("""
                 WITH conteos AS (
                     SELECT
@@ -610,7 +566,6 @@ def get_home_data_completo(usuario_id, carrera_id, anio_actual):
             total, aprobadas, cursando, regulares, desaprobadas = cur.fetchone()
             avance = round((aprobadas / total) * 100, 1) if total > 0 else 0
 
-            # ── Configuración de fechas de cuatrimestre ──────────────────
             cur.execute("""
                 SELECT anio, cuatrimestre, fecha_inicio, fecha_fin
                 FROM configuracion_cuatrimestre
@@ -619,15 +574,10 @@ def get_home_data_completo(usuario_id, carrera_id, anio_actual):
             """, (usuario_id,))
             configs = {(r[0], r[1]): (r[2], r[3]) for r in cur.fetchall()}
 
-            # Cuatrimestre "actual" según las fechas reales configuradas —
-            # se resuelve acá adentro (no en home.py) para poder pedir las
-            # materias cursando del cuatrimestre correcto en esta misma
-            # conexión, sin ida y vuelta extra al pool.
             cuatrimestre_para_query, header_cuatrimestre, en_transicion = determinar_estado_cuatrimestre(
                 anio_actual, configs
             )
 
-            # ── Materias cursando + notas ────────────────────────────────
             cur.execute("""
                 WITH materias_cursando AS (
                     SELECT
@@ -675,7 +625,6 @@ def get_home_data_completo(usuario_id, carrera_id, anio_actual):
             """, (usuario_id, anio_actual, cuatrimestre_para_query, usuario_id))
             materias_cursando = cur.fetchall()
 
-            # ── Faltas por materia ───────────────────────────────────────
             cur.execute("""
                 SELECT materia_id, COUNT(*)
                 FROM asistencias
@@ -684,7 +633,6 @@ def get_home_data_completo(usuario_id, carrera_id, anio_actual):
             """, (usuario_id,))
             faltas_map = {r[0]: r[1] for r in cur.fetchall()}
 
-            # ── Feriados ──────────────────────────────────────────────────
             cur.execute("""
                 SELECT id, fecha, descripcion
                 FROM feriados
@@ -693,7 +641,6 @@ def get_home_data_completo(usuario_id, carrera_id, anio_actual):
             """, (usuario_id,))
             feriados_set = {r[1] for r in cur.fetchall()}
 
-            # ── Tareas pendientes ────────────────────────────────────────
             cur.execute("""
                 SELECT t.numero, t.descripcion, t.fecha_vencimiento, m.nombre
                 FROM tareas t
@@ -703,7 +650,6 @@ def get_home_data_completo(usuario_id, carrera_id, anio_actual):
             """, (usuario_id,))
             tareas = cur.fetchall()
 
-            # ── Clases de hoy ─────────────────────────────────────────────
             cur.execute("""
                 SELECT m.nombre, c.horario, c.link, c.modalidad, c.turno
                 FROM cursadas c
@@ -719,37 +665,16 @@ def get_home_data_completo(usuario_id, carrera_id, anio_actual):
             cuatrimestre_para_query, header_cuatrimestre, en_transicion,
             materias_cursando, faltas_map, feriados_set, tareas, clases_hoy)
 
-# ─── Batch de Plan de Estudios (ítem prioridad alta, latencia de carga,
-# 13/08/2026) ────────────────────────────────────────────────────────────
-# Antes, pages/materias.py abría 3 conexiones fijas al pool antes de poder
-# pintar nada: materias de la carrera (antes get_materias_carrera), estado
-# de cada materia para el alumno (antes get_estados_alumno) y correlativas
-# de toda la carrera (antes get_correlativas_carrera). Se consolida todo en
-# una sola conexión, mismo criterio que get_home_data_completo (arriba) y
-# get_cursadas_tab_data (cursadas.py): en Neon serverless el costo real es
-# el round-trip de adquirir la conexión, no las queries en sí.
-#
-# Plan de Estudios es la segunda pantalla más visitada después de Home
-# (es el punto de entrada para marcar una materia como cursando o
-# aprobada), así que el ahorro de 3→1 conexiones tiene impacto directo en
-# la experiencia de uso diario.
-#
-# Invalidación de caché: actualizar_estado_materia() (única función que
-# escribe en alumno_materias) limpia este caché además del suyo propio.
-
+# ─── Batch de Plan de Estudios ───────────────────────────────────────────────
 @st.cache_data(ttl=60)
 def get_materias_data_completo(usuario_id, carrera_id):
     """
     Devuelve, en una sola conexión, todo lo que necesita pages/materias.py
     para pintar el Plan de Estudios:
     (materias, estados_map, correlativas_map)
-    - materias: [(id, nombre, anio, cuatrimestre, final_obligatorio, es_electiva), ...]
-    - estados_map: {materia_id: estado} — estado del alumno para cada materia
-    - correlativas_map: {materia_id: [(requiere_materia_id, requiere_nombre), ...]}
     """
     with get_conn() as conn:
         with conn.cursor() as cur:
-            # ── Materias de la carrera ───────────────────────────────────
             cur.execute("""
                 SELECT id, nombre, anio, cuatrimestre, final_obligatorio, es_electiva
                 FROM materias
@@ -758,7 +683,6 @@ def get_materias_data_completo(usuario_id, carrera_id):
             """, (carrera_id,))
             materias = cur.fetchall()
 
-            # ── Estado del alumno por materia ────────────────────────────
             cur.execute("""
                 SELECT materia_id, estado
                 FROM alumno_materias
@@ -766,7 +690,6 @@ def get_materias_data_completo(usuario_id, carrera_id):
             """, (usuario_id,))
             estados_map = {r[0]: r[1] for r in cur.fetchall()}
 
-            # ── Correlativas de toda la carrera ──────────────────────────
             cur.execute("""
                 SELECT co.materia_id, r.id, r.nombre
                 FROM correlatividades co
@@ -781,22 +704,7 @@ def get_materias_data_completo(usuario_id, carrera_id):
 
     return materias, estados_map, correlativas_map
 
-# ─── Backup de la base de datos (ítem prioridad alta, 09/08/2026) ──────────
-# Dos formatos, ambos generados en Python puro (sin pg_dump, que no está
-# garantizado en Streamlit Community Cloud):
-#   - SQL: un .sql con INSERTs, restaurable con restaurar_backup_sql() de
-#     acá abajo (ítem prioridad alta, 10/08/2026 — restauración por upsert).
-#   - CSV: un .zip con un .csv por tabla, para inspeccionar en Excel/Sheets.
-# Las dos funciones abren UNA sola conexión y recorren todas las tablas ahí
-# adentro (mismo criterio que el resto del proyecto: en Neon serverless el
-# costo real es el round-trip de adquirir la conexión, no las queries en sí).
-#
-# TABLAS_BACKUP está en orden de dependencias (tablas padre antes que hijas)
-# para que el .sql se pueda ejecutar de arriba a abajo sin violar foreign
-# keys. Se arma a mano en vez de vía introspección del catálogo de Postgres
-# para no depender de que el esquema no tenga tablas ajenas al proyecto.
-# El mismo orden, invertido, se usa para el borrado en modo espejo de
-# restaurar_backup_sql() (hijas antes que padres, para no romper FKs).
+# ─── Backup de la base de datos ──────────────────────────────────────────────
 TABLAS_BACKUP = [
     "carreras",
     "usuarios",
@@ -822,17 +730,7 @@ TABLAS_BACKUP = [
 def _fila_a_insert(tabla, columnas, fila, conn):
     """
     Arma un INSERT INTO ... VALUES (...) ON CONFLICT (id) DO UPDATE ... para
-    una fila, escapando los valores de forma segura con psycopg.sql (misma
-    librería que usa el resto del proyecto), sin depender de mogrify ni de
-    armar el escapeo a mano.
-
-    El ON CONFLICT (id) DO UPDATE (agregado 10/08/2026, ítem "Backup:
-    importación/restauración") es lo que permite que restaurar_backup_sql()
-    haga un upsert: si el id de la fila ya existe en la base viva, la
-    actualiza con los valores del backup; si no existe, la inserta. Todas
-    las tablas del proyecto usan "id SERIAL PRIMARY KEY" como primera
-    columna, así que este criterio es uniforme en las 19 tablas de
-    TABLAS_BACKUP.
+    una fila, escapando los valores de forma segura con psycopg.sql.
     """
     columnas_sql = pgsql.SQL(", ").join(pgsql.Identifier(c) for c in columnas)
     valores_sql = pgsql.SQL(", ").join(pgsql.Literal(v) for v in fila)
@@ -845,9 +743,6 @@ def _fila_a_insert(tabla, columnas, fila, conn):
         )
         conflicto_sql = pgsql.SQL(" ON CONFLICT (id) DO UPDATE SET {}").format(update_sql)
     else:
-        # Caso borde: una tabla con solo la columna "id" no tendría nada que
-        # actualizar — no pasa hoy en ninguna de las 19 tablas, pero se deja
-        # cubierto por las dudas.
         conflicto_sql = pgsql.SQL(" ON CONFLICT (id) DO NOTHING")
 
     stmt = pgsql.SQL("INSERT INTO {} ({}) VALUES ({}){};").format(
@@ -859,20 +754,6 @@ def generar_backup_sql():
     """
     Devuelve bytes de un .sql con un INSERT (upsert por id) por fila de cada
     tabla en TABLAS_BACKUP, envuelto en una transacción (BEGIN/COMMIT).
-
-    Restauración: usar la sección "📥 Restaurar backup" de Administración
-    (restaurar_backup_sql() de acá abajo), que sube este mismo archivo y lo
-    corre fila por fila. También se puede ejecutar manualmente contra una
-    base con el esquema ya creado (init_db()), aunque a mano se pierde el
-    reporte de filas que fallaron y el modo espejo.
-
-    Cada fila queda seguida por un comentario marcador con un delimitador
-    único generado al vuelo (UUID), del tipo "-- END_STMT_<uuid> id=<id>".
-    Este delimitador (no una simple línea en blanco) es lo que le permite a
-    restaurar_backup_sql() reconstruir cada INSERT de forma confiable aunque
-    algún campo de texto (una observación, una descripción) tenga un salto
-    de línea real adentro: partir el archivo por saltos de línea sueltos no
-    alcanzaría en ese caso, porque el INSERT ocuparía más de una línea física.
     """
     delimitador = f"END_STMT_{uuid.uuid4().hex}"
     lineas = [
@@ -895,8 +776,6 @@ def generar_backup_sql():
                 lineas.append(f"-- Tabla: {tabla} ({len(filas)} filas)")
                 for fila in filas:
                     lineas.append(_fila_a_insert(tabla, columnas, fila, conn))
-                    # fila[0] es el id: "id" es siempre la primera columna
-                    # declarada en las 19 tablas de TABLAS_BACKUP.
                     lineas.append(f"-- {delimitador} id={fila[0]}")
                 lineas.append("")
     lineas.append("COMMIT;")
@@ -906,8 +785,7 @@ def generar_backup_sql():
 def generar_backup_csv_zip():
     """
     Devuelve bytes de un .zip con un archivo <tabla>.csv por cada tabla en
-    TABLAS_BACKUP (encabezado con nombres de columna + todas las filas).
-    Pensado para inspección en Excel/Sheets, no para restaurar directamente.
+    TABLAS_BACKUP.
     """
     buffer_zip = BytesIO()
     with get_conn() as conn:
@@ -926,34 +804,10 @@ def generar_backup_csv_zip():
     buffer_zip.seek(0)
     return buffer_zip.getvalue()
 
-# ─── Restauración de backup (ítem prioridad alta, 10/08/2026) ─────────────
-# Decisiones de diseño (charladas y confirmadas el 10/08/2026, ver
-# PSICO_Mejoras_Pendientes.md):
-#   1. Upsert por id, no "vaciar todo antes": una fila del backup cuyo id ya
-#      existe en la base viva se ACTUALIZA con los valores del backup; si no
-#      existe, se INSERTA. Por defecto no se borra nada que esté en la base
-#      viva y no esté en el backup — restaurar un backup viejo no debe poder
-#      borrar por accidente algo cargado después.
-#   2. Fila por fila, no todo o nada: cada INSERT corre en su propio
-#      SAVEPOINT (con conn.transaction(), que psycopg3 anida como SAVEPOINT
-#      al estar ya dentro de una transacción abierta). Si una fila falla
-#      (típicamente un choque de UNIQUE — email o legajo — con OTRO id), se
-#      hace rollback de esa fila puntual y se sigue con las demás, en vez de
-#      abortar toda la restauración por un error aislado.
-#   3. Modo espejo (opcional, casilla aparte en la UI): además del upsert,
-#      borra de cada tabla las filas cuyo id NO aparezca en el backup, para
-#      dejar la base exactamente como estaba en el momento en que se generó
-#      ese backup. Incluye el caso de una tabla con 0 filas en el backup —
-#      ahí se vacía la tabla entera en la base viva. Se recorre
-#      TABLAS_BACKUP en orden INVERSO (tablas hijas antes que padres) para
-#      no romper foreign keys al borrar.
-
 def _parsear_backup_sql(texto):
     """
     Parsea el contenido de un .sql generado por generar_backup_sql() y
-    devuelve una lista de (tabla, id_str, statement_sql), en el mismo orden
-    en que aparecen en el archivo. Lanza ValueError si el archivo no tiene
-    el delimitador esperado (es decir, no es un backup de esta app).
+    devuelve una lista de (tabla, id_str, statement_sql).
     """
     m_delim = re.search(r"-- Delimitador interno de restauración:\s*(\S+)", texto)
     if not m_delim:
@@ -991,18 +845,7 @@ def _parsear_backup_sql(texto):
 
 def restaurar_backup_sql(contenido, modo_espejo=False):
     """
-    Restaura un backup generado por generar_backup_sql(). Ver el bloque de
-    comentarios de arriba para las tres decisiones de diseño.
-
-    `contenido` puede ser bytes (tal cual entrega st.file_uploader) o str.
-
-    Devuelve:
-    {
-        "ok_total": int,                          # filas insertadas/actualizadas
-        "error_total": int,                        # filas que fallaron
-        "errores": [(tabla, id_str, mensaje), ...], # detalle, hasta 50
-        "borradas": int,                            # filas borradas (modo espejo)
-    }
+    Restaura un backup generado por generar_backup_sql().
     """
     texto = contenido.decode("utf-8") if isinstance(contenido, (bytes, bytearray)) else contenido
 
@@ -1035,9 +878,6 @@ def restaurar_backup_sql(contenido, modo_espejo=False):
                     try:
                         ids_int = [int(v) for v in ids_backup]
                     except ValueError:
-                        # id no numérico: no debería pasar (todas las tablas
-                        # usan SERIAL), pero por seguridad no tocamos esa
-                        # tabla en vez de arriesgar un borrado mal dirigido.
                         continue
                     try:
                         with conn.transaction():
@@ -1049,8 +889,6 @@ def restaurar_backup_sql(contenido, modo_espejo=False):
                                     (ids_int,),
                                 )
                             else:
-                                # Tabla sin ninguna fila en el backup: el
-                                # modo espejo la vacía por completo.
                                 cur.execute(pgsql.SQL("DELETE FROM {};").format(pgsql.Identifier(tabla)))
                             borradas += cur.rowcount
                     except Exception as e:

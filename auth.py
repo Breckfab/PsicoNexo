@@ -14,6 +14,21 @@ VENTANA_MINUTOS = 15
 # ─── Recuperación de contraseña (ítem prioridad alta, 17/08/2026) ──────────
 TOKEN_RESET_VENCE_MINUTOS = 60
 
+# ─── Rate limiting de recuperación de contraseña (ítem prioridad alta,
+# 28/08/2026) ────────────────────────────────────────────────────────────
+# A diferencia del login (que solo cuenta intentos FALLIDOS — el éxito limpia
+# el historial), acá no existe un "intento fallido": cada pedido de
+# recuperación se registra siempre, exista o no el email en la base. Si solo
+# contáramos los pedidos de emails que sí existen, el propio rate limit se
+# podría usar para averiguar qué emails están registrados (pedir varias veces
+# seguidas y ver si el sistema corta o no). Por eso el conteo es incondicional.
+#
+# Límite un poco más laxo que el de login (5 en vez de un número menor):
+# acá no hay contraseña que se pueda tipear mal, así que no hace falta ser
+# tan estricto, y de paso no molesta mientras se está probando el sistema.
+MAX_INTENTOS_RECUPERACION = 5
+VENTANA_MINUTOS_RECUPERACION = 15
+
 def hash_password(password):
     return bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
 
@@ -63,7 +78,7 @@ def register_user(email, password, nombre, carrera_id, codigo):
                     return False, "Ese email ya está registrado."
                 return False, f"Error al registrar: {e}"
 
-# ─── Rate limiting: helpers ─────────────────────────────────────────────────
+# ─── Rate limiting: helpers (login) ─────────────────────────────────────────
 
 def _contar_intentos_fallidos_recientes(email):
     with get_conn() as conn:
@@ -150,6 +165,23 @@ def get_codigos(admin_id):
             """, (admin_id,))
             return cur.fetchall()
 
+# ─── Rate limiting: helpers (recuperación de contraseña, 28/08/2026) ───────
+
+def _contar_intentos_recuperacion_recientes(email):
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT COUNT(*) FROM intentos_recuperacion
+                WHERE email = %s AND created_at > NOW() - make_interval(mins => %s);
+            """, (email, VENTANA_MINUTOS_RECUPERACION))
+            return cur.fetchone()[0]
+
+def _registrar_intento_recuperacion(email):
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("INSERT INTO intentos_recuperacion (email) VALUES (%s);", (email,))
+        conn.commit()
+
 # ─── Recuperación de contraseña (ítem prioridad alta, 17/08/2026) ──────────
 # Flujo: el alumno pide recuperación con su email → se genera un token de un
 # solo uso con vencimiento de 1 hora → se manda por email (vía Resend, ver
@@ -170,14 +202,29 @@ def solicitar_recuperacion(email, base_url):
     armar el link completo.
 
     Devuelve siempre (True, mensaje_generico) salvo error real al mandar el
-    email de un usuario que sí existe — así no se filtra si el email está
-    registrado o no.
+    email de un usuario que sí existe, o que se haya cortado por rate limit
+    — así no se filtra si el email está registrado o no.
+
+    Rate limiting (ítem prioridad alta, 28/08/2026): el conteo de intentos
+    es INCONDICIONAL, se registra tanto si el email existe como si no. Si
+    solo contáramos los pedidos de emails existentes, el propio rate limit
+    serviría para deducir qué emails están registrados (pedir varias veces
+    seguidas y ver si el sistema corta o no).
     """
     email_norm = email.lower().strip()
     mensaje_generico = (
         "Si el email está registrado, te mandamos un link para restablecer "
         "tu contraseña. Revisá tu bandeja de entrada (y la carpeta de spam)."
     )
+
+    intentos = _contar_intentos_recuperacion_recientes(email_norm)
+    if intentos >= MAX_INTENTOS_RECUPERACION:
+        # Mismo mensaje genérico de siempre — no delatamos que se cortó por
+        # rate limit, para no darle a un atacante una señal distinta según
+        # si el email existe o no.
+        return True, mensaje_generico
+
+    _registrar_intento_recuperacion(email_norm)
 
     with get_conn() as conn:
         with conn.cursor() as cur:

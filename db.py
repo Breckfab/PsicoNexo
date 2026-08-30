@@ -371,6 +371,25 @@ def init_db():
         ON intentos_login (email, created_at);
     """)
 
+    # ── Rate limiting de recuperación de contraseña (ítem prioridad alta,
+    # 28/08/2026) ────────────────────────────────────────────────────────
+    # A diferencia de intentos_login, acá se registra CADA pedido de
+    # recuperación (exista o no el email), para no delatar con el propio
+    # rate limit qué emails están registrados. Ver el comentario completo
+    # en auth.py, junto a solicitar_recuperacion().
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS intentos_recuperacion (
+            id SERIAL PRIMARY KEY,
+            email TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT NOW()
+        );
+    """)
+
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_intentos_recuperacion_email_fecha
+        ON intentos_recuperacion (email, created_at);
+    """)
+
     # ── Recuperación de contraseña (ítem prioridad alta, 17/08/2026) ───────
     # Un token de un solo uso por solicitud, con vencimiento corto (1 hora,
     # ver GENERAR_TOKEN_RESET_VENCE_MINUTOS en auth.py). "usado" evita que
@@ -725,6 +744,7 @@ TABLAS_BACKUP = [
     "configuracion_cuatrimestre",
     "feriados",
     "intentos_login",
+    "intentos_recuperacion",
 ]
 
 def _fila_a_insert(tabla, columnas, fila, conn):

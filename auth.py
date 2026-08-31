@@ -1,4 +1,4 @@
-# auth.py
+# auth.py - 31/08/2026
 
 import bcrypt
 import streamlit as st

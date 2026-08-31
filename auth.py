@@ -42,6 +42,12 @@ def get_carreras():
             return cur.fetchall()
 
 def verificar_codigo(codigo):
+    """
+    Chequeo de solo lectura, ya sin uso dentro de register_user() desde el
+    fix de la condición de carrera (31/08/2026) — se deja disponible por si
+    en el futuro hace falta validar un código sin consumirlo (por ejemplo,
+    un botón de "invalidar código" en el panel de Admin).
+    """
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute("SELECT id FROM codigos_invitacion WHERE codigo = %s AND usado = FALSE;", (codigo,))
@@ -49,6 +55,13 @@ def verificar_codigo(codigo):
     return row is not None
 
 def marcar_codigo_usado(codigo, usuario_id):
+    """
+    Igual que verificar_codigo(): ya no la usa register_user() (ver comentario
+    ahí), se deja disponible para otros posibles llamadores futuros. OJO: a
+    diferencia del UPDATE atómico de register_user(), esta versión NO chequea
+    `usado = FALSE` en el WHERE, así que no sirve como candado de concurrencia
+    por sí sola.
+    """
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute("""
@@ -57,9 +70,31 @@ def marcar_codigo_usado(codigo, usuario_id):
             """, (usuario_id, codigo))
         conn.commit()
 
+# ─── Registro de usuario (fix condición de carrera, 31/08/2026) ────────────
+# Antes: verificar_codigo() → INSERT usuarios → marcar_codigo_usado(), en 3
+# pasos separados (3 conexiones/transacciones distintas). Si dos registros
+# con el mismo código llegaban casi en simultáneo, los dos podían pasar la
+# verificación antes de que cualquiera de los dos marcara el código como
+# usado, y terminaban ambos registrados con el mismo código de invitación.
+#
+# Ahora: todo corre en una sola conexión y una sola transacción. El INSERT
+# del usuario va primero (necesitamos el usuario_id para guardarlo en
+# usado_por), y el candado de concurrencia real es el UPDATE de más abajo:
+#
+#   UPDATE codigos_invitacion SET usado = TRUE, usado_por = %s
+#   WHERE codigo = %s AND usado = FALSE
+#   RETURNING id;
+#
+# Postgres bloquea la fila del código durante ese UPDATE. Si dos registros
+# llegan en simultáneo con el mismo código, uno de los dos gana la carrera y
+# el otro, cuando le toca correr su propio UPDATE, ya encuentra la fila con
+# usado = TRUE — su WHERE no matchea ninguna fila, RETURNING no devuelve
+# nada, y se interpreta como "código inválido o ya usado". Se hace rollback
+# de toda la transacción (incluyendo el INSERT del usuario, que también
+# queda deshecho), así que no se puede quedar un usuario creado sin un
+# código válido detrás.
 def register_user(email, password, nombre, carrera_id, codigo):
-    if not verificar_codigo(codigo):
-        return False, "Código de invitación inválido o ya usado."
+    codigo_norm = codigo.strip()
     with get_conn() as conn:
         with conn.cursor() as cur:
             try:
@@ -69,8 +104,24 @@ def register_user(email, password, nombre, carrera_id, codigo):
                     (email.lower().strip(), password_hash, nombre.strip(), carrera_id)
                 )
                 usuario_id = cur.fetchone()[0]
+
+                cur.execute("""
+                    UPDATE codigos_invitacion
+                    SET usado = TRUE, usado_por = %s
+                    WHERE codigo = %s AND usado = FALSE
+                    RETURNING id;
+                """, (usuario_id, codigo_norm))
+                fila_codigo = cur.fetchone()
+
+                if not fila_codigo:
+                    # El código no existe, o alguien más lo consumió en el
+                    # instante entre que este alumno lo tipeó y confirmó el
+                    # formulario. Se deshace todo, incluido el INSERT del
+                    # usuario de más arriba.
+                    conn.rollback()
+                    return False, "Código de invitación inválido o ya usado."
+
                 conn.commit()
-                marcar_codigo_usado(codigo, usuario_id)
                 return True, "Registro exitoso."
             except Exception as e:
                 conn.rollback()

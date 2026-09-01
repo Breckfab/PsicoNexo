@@ -1,4 +1,4 @@
-# auth.py - 31/08/2026
+# auth.py - 01/09/2026
 
 import bcrypt
 import streamlit as st
@@ -140,10 +140,21 @@ def _contar_intentos_fallidos_recientes(email):
             """, (email, VENTANA_MINUTOS))
             return cur.fetchone()[0]
 
+# ─── Limpieza de tablas que crecen sin control (ítem prioridad media,
+# 01/09/2026) ────────────────────────────────────────────────────────────
+# intentos_login nunca se borraba para los emails que jamás loguean con
+# éxito (_limpiar_intentos_fallidos solo corre en un login exitoso). Con
+# uso real esto crece indefinidamente. Solución: limpieza oportunista, sin
+# cron ni botón manual — cada vez que se registra un intento fallido nuevo,
+# se aprovecha esa misma conexión para borrar lo que ya venció (más de 1
+# día, mismo criterio que ya estaba anotado en Mejoras Pendientes). Como
+# el sistema lo usás vos solo, cada intento de login dispara la limpieza
+# con frecuencia de sobra para que la tabla no crezca sin control.
 def _registrar_intento_fallido(email):
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute("INSERT INTO intentos_login (email) VALUES (%s);", (email,))
+            cur.execute("DELETE FROM intentos_login WHERE created_at < NOW() - INTERVAL '1 day';")
         conn.commit()
 
 def _limpiar_intentos_fallidos(email):
@@ -227,10 +238,17 @@ def _contar_intentos_recuperacion_recientes(email):
             """, (email, VENTANA_MINUTOS_RECUPERACION))
             return cur.fetchone()[0]
 
+# ─── Limpieza de tablas que crecen sin control (ítem prioridad media,
+# 01/09/2026) ────────────────────────────────────────────────────────────
+# Mismo problema y mismo criterio que _registrar_intento_fallido() (ver
+# comentario ahí): intentos_recuperacion se registra siempre (exista o no
+# el email) y nunca se limpiaba. Se aprovecha cada INSERT nuevo para borrar
+# lo que ya tiene más de 1 día.
 def _registrar_intento_recuperacion(email):
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute("INSERT INTO intentos_recuperacion (email) VALUES (%s);", (email,))
+            cur.execute("DELETE FROM intentos_recuperacion WHERE created_at < NOW() - INTERVAL '1 day';")
         conn.commit()
 
 # ─── Recuperación de contraseña (ítem prioridad alta, 17/08/2026) ──────────
@@ -297,6 +315,13 @@ def solicitar_recuperacion(email, base_url):
                 INSERT INTO password_reset_tokens (usuario_id, token, expires_at)
                 VALUES (%s, %s, %s);
             """, (usuario_id, token, expira))
+            # ── Limpieza de tablas que crecen sin control (ítem prioridad
+            # media, 01/09/2026) ────────────────────────────────────────
+            # password_reset_tokens tampoco limpiaba los tokens ya vencidos.
+            # Se aprovecha cada INSERT nuevo (se genera acá arriba, en esta
+            # misma conexión) para borrar los que ya expiraron — usados o
+            # no, si expires_at ya pasó, el token no sirve para nada.
+            cur.execute("DELETE FROM password_reset_tokens WHERE expires_at < NOW();")
         conn.commit()
 
     link_reset = f"{base_url.rstrip('/')}/?reset_token={token}"

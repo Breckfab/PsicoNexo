@@ -1,4 +1,4 @@
-# db.py
+# db.py - 20/09/2026
 
 import os
 import re
@@ -106,6 +106,17 @@ def init_db():
     # todavía no lo tienen asignado ("pendiente").
     cur.execute("""
         ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS legajo TEXT UNIQUE;
+    """)
+
+    # Links a las carpetas de la carrera en Google Drive y Dropbox (20/09/2026).
+    # Un link por servicio, opcionales y editables desde Mi Perfil. Al vivir
+    # en la tabla usuarios, el backup SQL/CSV ya los incluye sin tocar
+    # TABLAS_BACKUP (generar_backup_* hacen SELECT * de cada tabla).
+    cur.execute("""
+        ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS link_google_drive TEXT;
+    """)
+    cur.execute("""
+        ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS link_dropbox TEXT;
     """)
 
     cur.execute("""

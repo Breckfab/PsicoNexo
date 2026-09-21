@@ -1,10 +1,11 @@
-# app.py
+# app.py - 20/09/2026
 
 import os
 import streamlit as st
 from db import (
     init_db, crear_admin_si_no_existe, get_uso_almacenamiento, NEON_STORAGE_LIMIT_BYTES,
     generar_backup_sql, generar_backup_csv_zip, restaurar_backup_sql,
+    get_conn,
 )
 from auth import (
     login_user, register_user, logout, get_carreras, generar_codigo, get_codigos,
@@ -12,7 +13,7 @@ from auth import (
 )
 import calendar
 from datetime import datetime
-from pages import home, materias, cursadas, evaluaciones, recursos, profesores, estadisticas, perfil
+from pages import home, materias, cursadas, evaluaciones, recursos, profesores, estadisticas, perfil, correlatividades
 
 st.set_page_config(page_title="PsicoNexo", page_icon="Psicologia_favicon_png.png", layout="wide")
 
@@ -406,6 +407,81 @@ def mostrar_backup_sidebar(usuario):
             use_container_width=True,
         )
 
+# ─── Carpetas en la nube: Google Drive y Dropbox (20/09/2026) ─────────────
+# Un link por servicio, siempre a mano en la barra lateral. Se leen de la
+# base UNA sola vez por sesión (se guardan en session_state, atados al id del
+# usuario para que no se mezclen si entra otra persona desde el mismo
+# navegador), así que no suman ninguna consulta a cada recarga de pantalla.
+# Las columnas link_google_drive y link_dropbox (tabla usuarios) las crea
+# init_db() en db.py.
+
+def _cargar_links_carpetas(usuario_id):
+    cache = st.session_state.get("links_carpetas")
+    if cache and cache["uid"] == usuario_id:
+        return cache["drive"], cache["dropbox"]
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT link_google_drive, link_dropbox FROM usuarios WHERE id = %s;",
+                    (usuario_id,)
+                )
+                row = cur.fetchone()
+    except Exception:
+        # Si las columnas todavía no existen (db.py sin actualizar), no se
+        # rompe el resto de la app: simplemente no se muestran los links.
+        return None, None
+    drive, dropbox = (row[0], row[1]) if row else (None, None)
+    st.session_state["links_carpetas"] = {"uid": usuario_id, "drive": drive, "dropbox": dropbox}
+    return drive, dropbox
+
+def _guardar_links_carpetas(usuario_id, link_drive, link_dropbox):
+    """Devuelve (ok, mensaje). Vacío = sin link (se guarda como NULL)."""
+    drive = link_drive.strip() if link_drive and link_drive.strip() else None
+    dropbox = link_dropbox.strip() if link_dropbox and link_dropbox.strip() else None
+
+    for etiqueta, valor in (("Google Drive", drive), ("Dropbox", dropbox)):
+        if valor and not valor.lower().startswith(("http://", "https://")):
+            return False, f"El link de {etiqueta} tiene que empezar con http:// o https://"
+
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE usuarios SET link_google_drive = %s, link_dropbox = %s WHERE id = %s;",
+                    (drive, dropbox, usuario_id)
+                )
+            conn.commit()
+    except Exception as e:
+        return False, f"No se pudieron guardar los links: {e}"
+
+    st.session_state["links_carpetas"] = {"uid": usuario_id, "drive": drive, "dropbox": dropbox}
+    return True, "Links guardados."
+
+def mostrar_carpetas_sidebar(usuario):
+    link_drive, link_dropbox = _cargar_links_carpetas(usuario["id"])
+
+    st.markdown("**📁 Mis carpetas**")
+    if link_drive:
+        st.link_button("Google Drive", link_drive, use_container_width=True)
+    if link_dropbox:
+        st.link_button("Dropbox", link_dropbox, use_container_width=True)
+    if not link_drive and not link_dropbox:
+        st.caption("Todavía no cargaste links.")
+
+    with st.expander("✏️ Editar links"):
+        with st.form("form_carpetas_sidebar"):
+            nuevo_drive = st.text_input("Link de Google Drive", value=link_drive or "")
+            nuevo_dropbox = st.text_input("Link de Dropbox", value=link_dropbox or "")
+            guardar = st.form_submit_button("💾 Guardar", use_container_width=True)
+        if guardar:
+            ok, msg = _guardar_links_carpetas(usuario["id"], nuevo_drive, nuevo_dropbox)
+            if ok:
+                st.success(msg)
+                st.rerun()
+            else:
+                st.error(msg)
+
 def mostrar_sidebar(usuario):
     with st.sidebar:
         tema_label = "🌙 Modo oscuro" if st.session_state.tema_oscuro else "☀️ Modo claro"
@@ -485,6 +561,10 @@ def mostrar_sidebar(usuario):
 
         st.markdown("---")
 
+        mostrar_carpetas_sidebar(usuario)
+
+        st.markdown("---")
+
         # ── Colores forzados de "Cerrar sesión" y "Backup rápido" (fix
         # 10/08/2026) ────────────────────────────────────────────────────
         # Versión anterior: un <div id="..."> invisible + selector CSS de
@@ -558,13 +638,14 @@ def mostrar_navbar(usuario):
         </div>
     """, unsafe_allow_html=True)
 
-    items = ["🏠 Inicio", "📚 Plan de Estudios", "🗓️ Materias", "📝 Notas", "📂 Recursos", "⭐ Profesores", "📊 Estadísticas", "👤 Mi Perfil"]
+    items = ["🏠 Inicio", "📚 Plan de Estudios", "🔗 Correlatividades", "🗓️ Materias", "📝 Notas", "📂 Recursos", "⭐ Profesores", "📊 Estadísticas", "👤 Mi Perfil"]
     if usuario.get("es_admin"):
         items.append("🔧 Administración")
 
     paginas = {
         "🏠 Inicio": "home",
         "📚 Plan de Estudios": "materias",
+        "🔗 Correlatividades": "correlatividades",
         "🗓️ Materias": "cursadas",
         "📝 Notas": "evaluaciones",
         "📂 Recursos": "recursos",
@@ -593,6 +674,8 @@ def mostrar_app():
         home.mostrar(usuario)
     elif pagina == "materias":
         materias.mostrar(usuario)
+    elif pagina == "correlatividades":
+        correlatividades.mostrar(usuario)
     elif pagina == "cursadas":
         cursadas.mostrar(usuario)
     elif pagina == "evaluaciones":

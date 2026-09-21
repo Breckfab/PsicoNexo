@@ -1,6 +1,8 @@
 # app.py - 20/09/2026
 
 import os
+import html
+import base64
 import streamlit as st
 from db import (
     init_db, crear_admin_si_no_existe, get_uso_almacenamiento, NEON_STORAGE_LIMIT_BYTES,
@@ -435,52 +437,144 @@ def _cargar_links_carpetas(usuario_id):
     st.session_state["links_carpetas"] = {"uid": usuario_id, "drive": drive, "dropbox": dropbox}
     return drive, dropbox
 
-def _guardar_links_carpetas(usuario_id, link_drive, link_dropbox):
-    """Devuelve (ok, mensaje). Vacío = sin link (se guarda como NULL)."""
-    drive = link_drive.strip() if link_drive and link_drive.strip() else None
-    dropbox = link_dropbox.strip() if link_dropbox and link_dropbox.strip() else None
+# Servicio -> columna de la tabla usuarios + nombre para mostrar.
+# Los nombres de columna salen SOLO de este diccionario (nunca del usuario).
+CARPETAS = {
+    "drive": {"columna": "link_google_drive", "nombre": "Google Drive"},
+    "dropbox": {"columna": "link_dropbox", "nombre": "Dropbox"},
+}
 
-    for etiqueta, valor in (("Google Drive", drive), ("Dropbox", dropbox)):
-        if valor and not valor.lower().startswith(("http://", "https://")):
-            return False, f"El link de {etiqueta} tiene que empezar con http:// o https://"
+# Logo de Google Drive (SVG) embebido como imagen, para el botón amarillo.
+_LOGO_DRIVE_B64 = "PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA4Ny4zIDc4Ij48cGF0aCBkPSJtNi42IDY2Ljg1IDMuODUgNi42NWMuOCAxLjQgMS45NSAyLjUgMy4zIDMuM2wxMy43NS0yMy44aC0yNy41YzAgMS41NS40IDMuMSAxLjIgNC41eiIgZmlsbD0iIzAwNjZkYSIvPjxwYXRoIGQ9Im00My42NSAyNS0xMy43NS0yMy44Yy0xLjM1LjgtMi41IDEuOS0zLjMgMy4zbC0yNS40IDQ0YTkuMDYgOS4wNiAwIDAgMCAtMS4yIDQuNWgyNy41eiIgZmlsbD0iIzAwYWM0NyIvPjxwYXRoIGQ9Im03My41NSA3Ni44YzEuMzUtLjggMi41LTEuOSAzLjMtMy4zbDEuNi0yLjc1IDcuNjUtMTMuMjVjLjgtMS40IDEuMi0yLjk1IDEuMi00LjVoLTI3LjUwMmw1Ljg1MiAxMS41eiIgZmlsbD0iI2VhNDMzNSIvPjxwYXRoIGQ9Im00My42NSAyNSAxMy43NS0yMy44Yy0xLjM1LS44LTIuOS0xLjItNC41LTEuMmgtMTguNWMtMS42IDAtMy4xNS40NS00LjUgMS4yeiIgZmlsbD0iIzAwODMyZCIvPjxwYXRoIGQ9Im01OS44IDUzaC0zMi4zbC0xMy43NSAyMy44YzEuMzUuOCAyLjkgMS4yIDQuNSAxLjJoNTAuOGMxLjYgMCAzLjE1LS40NSA0LjUtMS4yeiIgZmlsbD0iIzI2ODRmYyIvPjxwYXRoIGQ9Im03My40IDI2LjUtMTIuNy0yMmMtLjgtMS40LTEuOTUtMi41LTMuMy0zLjNsLTEzLjc1IDIzLjggMTYuMTUgMjhoMjcuNDVjMC0xLjU1LS40LTMuMS0xLjItNC41eiIgZmlsbD0iI2ZmYmEwMCIvPjwvc3ZnPg=="
+ICONO_DRIVE_HTML = (
+    f'<img src="data:image/svg+xml;base64,{_LOGO_DRIVE_B64}" '
+    'width="20" height="20" style="display:block;">'
+)
+ICONO_DROPBOX_HTML = '<span style="font-size:18px; line-height:1;">☁️</span>'
+
+def _guardar_link_carpeta(usuario_id, servicio, link):
+    """
+    Guarda (o borra, si `link` viene vacío) el link de UN servicio, sin tocar
+    el del otro. Devuelve (ok, mensaje).
+    """
+    columna = CARPETAS[servicio]["columna"]
+    nombre = CARPETAS[servicio]["nombre"]
+    valor = link.strip() if link and link.strip() else None
+
+    if valor and not valor.lower().startswith(("http://", "https://")):
+        return False, f"El link de {nombre} tiene que empezar con http:// o https://"
 
     try:
         with get_conn() as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    "UPDATE usuarios SET link_google_drive = %s, link_dropbox = %s WHERE id = %s;",
-                    (drive, dropbox, usuario_id)
+                    f"UPDATE usuarios SET {columna} = %s WHERE id = %s;",
+                    (valor, usuario_id)
                 )
             conn.commit()
     except Exception as e:
-        return False, f"No se pudieron guardar los links: {e}"
+        return False, f"No se pudo guardar el link de {nombre}: {e}"
 
-    st.session_state["links_carpetas"] = {"uid": usuario_id, "drive": drive, "dropbox": dropbox}
-    return True, "Links guardados."
+    cache = st.session_state.get("links_carpetas")
+    if cache and cache["uid"] == usuario_id:
+        cache[servicio] = valor
+    else:
+        st.session_state.pop("links_carpetas", None)
+    return True, "Link guardado." if valor else "Link borrado."
+
+def _boton_link_html(url, texto, fondo, color_texto, icono_html):
+    """
+    Botón-link a pantalla completa de la barra lateral. Se arma como HTML
+    propio (en vez de st.link_button) para poder ponerle color de fondo e
+    icono sin depender de la versión de Streamlit ni de sus clases CSS.
+    Va en UNA sola línea a propósito: en Markdown, una línea indentada se
+    interpretaría como bloque de código.
+    """
+    return (
+        f'<a href="{html.escape(url, quote=True)}" target="_blank" rel="noopener noreferrer" '
+        f'style="display:flex; align-items:center; justify-content:center; gap:8px; width:100%; '
+        f'box-sizing:border-box; padding:9px 12px; border-radius:8px; background:{fondo}; '
+        f'color:{color_texto} !important; font-weight:700; font-size:14px; '
+        f'text-decoration:none !important; margin-bottom:6px;">'
+        f'{icono_html}<span>{texto}</span></a>'
+    )
+
+def _bloque_carpeta(usuario_id, servicio, link, fondo, color_texto, icono_html):
+    """
+    Un servicio (Drive o Dropbox) con dos estados:
+    - Con link cargado: botón para abrirlo + "Editar" y "Borrar". El link NO
+      queda a la vista en una caja de texto, así no se modifica por error.
+      "Borrar" pide confirmación (mismo patrón que el resto del sistema).
+    - Sin link, o tocando "Editar": caja de texto + "Guardar" (y "Cancelar"
+      si ya había un link).
+    """
+    nombre = CARPETAS[servicio]["nombre"]
+    key_editando = f"carpeta_editando_{servicio}"
+    key_borrar = f"carpeta_confirmar_borrar_{servicio}"
+
+    if not link or st.session_state.get(key_editando):
+        st.markdown(f"**{nombre}**")
+        with st.form(f"form_carpeta_{servicio}"):
+            nuevo = st.text_input(
+                f"Link de {nombre}", value=link or "", placeholder="Pegá acá el link de la carpeta"
+            )
+            if link:
+                col_g, col_c = st.columns(2)
+                with col_g:
+                    guardar = st.form_submit_button("💾 Guardar", use_container_width=True)
+                with col_c:
+                    cancelar = st.form_submit_button("❌ Cancelar", use_container_width=True)
+            else:
+                guardar = st.form_submit_button("💾 Guardar", use_container_width=True)
+                cancelar = False
+
+        if guardar:
+            if not nuevo.strip():
+                st.error("Pegá el link antes de guardar.")
+            else:
+                ok, msg = _guardar_link_carpeta(usuario_id, servicio, nuevo)
+                if ok:
+                    st.session_state[key_editando] = False
+                    st.rerun()
+                else:
+                    st.error(msg)
+        if cancelar:
+            st.session_state[key_editando] = False
+            st.rerun()
+        return
+
+    st.markdown(_boton_link_html(link, nombre, fondo, color_texto, icono_html), unsafe_allow_html=True)
+
+    if st.session_state.get(key_borrar):
+        st.warning(f"¿Borrar el link de {nombre}?")
+        col_si, col_no = st.columns(2)
+        with col_si:
+            if st.button("✅ Sí", key=f"si_borrar_carpeta_{servicio}", use_container_width=True):
+                _guardar_link_carpeta(usuario_id, servicio, "")
+                st.session_state[key_borrar] = False
+                st.rerun()
+        with col_no:
+            if st.button("❌ No", key=f"no_borrar_carpeta_{servicio}", use_container_width=True):
+                st.session_state[key_borrar] = False
+                st.rerun()
+    else:
+        col_e, col_b = st.columns(2)
+        with col_e:
+            if st.button("✏️ Editar", key=f"btn_editar_carpeta_{servicio}", use_container_width=True):
+                st.session_state[key_editando] = True
+                st.rerun()
+        with col_b:
+            if st.button("🗑️ Borrar", key=f"btn_borrar_carpeta_{servicio}", use_container_width=True):
+                st.session_state[key_borrar] = True
+                st.rerun()
 
 def mostrar_carpetas_sidebar(usuario):
     link_drive, link_dropbox = _cargar_links_carpetas(usuario["id"])
 
     st.markdown("**📁 Mis carpetas**")
-    if link_drive:
-        st.link_button("Google Drive", link_drive, use_container_width=True)
-    if link_dropbox:
-        st.link_button("Dropbox", link_dropbox, use_container_width=True)
-    if not link_drive and not link_dropbox:
-        st.caption("Todavía no cargaste links.")
-
-    with st.expander("✏️ Editar links"):
-        with st.form("form_carpetas_sidebar"):
-            nuevo_drive = st.text_input("Link de Google Drive", value=link_drive or "")
-            nuevo_dropbox = st.text_input("Link de Dropbox", value=link_dropbox or "")
-            guardar = st.form_submit_button("💾 Guardar", use_container_width=True)
-        if guardar:
-            ok, msg = _guardar_links_carpetas(usuario["id"], nuevo_drive, nuevo_dropbox)
-            if ok:
-                st.success(msg)
-                st.rerun()
-            else:
-                st.error(msg)
+    _bloque_carpeta(usuario["id"], "drive", link_drive, "#FFBA00", "#1F2937", ICONO_DRIVE_HTML)
+    st.markdown("<div style='height:6px;'></div>", unsafe_allow_html=True)
+    _bloque_carpeta(usuario["id"], "dropbox", link_dropbox, "#0061FF", "#FFFFFF", ICONO_DROPBOX_HTML)
 
 def mostrar_sidebar(usuario):
     with st.sidebar:

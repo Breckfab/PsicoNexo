@@ -109,15 +109,11 @@ def init_db():
     """)
 
     # Links a las carpetas de la carrera en Google Drive y Dropbox (20/09/2026).
-    # Un link por servicio, opcionales y editables desde Mi Perfil. Al vivir
+    # Un link por servicio, opcionales y editables desde la barra lateral. Al vivir
     # en la tabla usuarios, el backup SQL/CSV ya los incluye sin tocar
     # TABLAS_BACKUP (generar_backup_* hacen SELECT * de cada tabla).
-    cur.execute("""
-        ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS link_google_drive TEXT;
-    """)
-    cur.execute("""
-        ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS link_dropbox TEXT;
-    """)
+    cur.execute("ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS link_google_drive TEXT;")
+    cur.execute("ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS link_dropbox TEXT;")
 
     cur.execute("""
         CREATE TABLE IF NOT EXISTS materias (

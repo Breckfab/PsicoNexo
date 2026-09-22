@@ -137,27 +137,6 @@ def init_db():
         );
     """)
 
-    # ── Gestión del plan de estudios desde la app (ítem "Gestión de cambios
-    # al plan de estudios", 22/09/2026) ─────────────────────────────────────
-    # Antes el plan solo se cargaba una vez con seed_materias.py; cualquier
-    # cambio requería tocar Neon a mano. `vigente` reemplaza el borrado
-    # físico: una materia no vigente no aparece para quien no la cursó, pero
-    # el historial de quien ya la cursó queda intacto (las FK a
-    # alumno_materias, cursadas, evaluaciones y recursos nunca se rompen
-    # porque la fila nunca se borra).
-    cur.execute("ALTER TABLE materias ADD COLUMN IF NOT EXISTS vigente BOOLEAN DEFAULT TRUE;")
-
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS historial_plan_estudios (
-            id SERIAL PRIMARY KEY,
-            tipo_cambio TEXT NOT NULL,
-            materia_id INTEGER REFERENCES materias(id),
-            detalle TEXT,
-            realizado_por INTEGER REFERENCES usuarios(id),
-            created_at TIMESTAMP DEFAULT NOW()
-        );
-    """)
-
     cur.execute("""
         CREATE TABLE IF NOT EXISTS alumno_materias (
             id SERIAL PRIMARY KEY,
@@ -606,16 +585,11 @@ def get_home_data_completo(usuario_id, carrera_id, anio_actual):
                     WHERE usuario_id = %s
                 ),
                 total AS (
-                    SELECT COUNT(*) AS total FROM materias
-                    WHERE carrera_id = %s
-                      AND (vigente = TRUE OR id IN (
-                          SELECT materia_id FROM alumno_materias
-                          WHERE usuario_id = %s AND estado != 'pendiente'
-                      ))
+                    SELECT COUNT(*) AS total FROM materias WHERE carrera_id = %s
                 )
                 SELECT t.total, c.aprobadas, c.cursando, c.regulares, c.desaprobadas
                 FROM total t, conteos c;
-            """, (usuario_id, carrera_id, usuario_id))
+            """, (usuario_id, carrera_id))
             total, aprobadas, cursando, regulares, desaprobadas = cur.fetchone()
             avance = round((aprobadas / total) * 100, 1) if total > 0 else 0
 
@@ -732,12 +706,8 @@ def get_materias_data_completo(usuario_id, carrera_id):
                 SELECT id, nombre, anio, cuatrimestre, final_obligatorio, es_electiva
                 FROM materias
                 WHERE carrera_id = %s
-                  AND (vigente = TRUE OR id IN (
-                      SELECT materia_id FROM alumno_materias
-                      WHERE usuario_id = %s AND estado != 'pendiente'
-                  ))
                 ORDER BY anio, cuatrimestre, nombre;
-            """, (carrera_id, usuario_id))
+            """, (carrera_id,))
             materias = cur.fetchall()
 
             cur.execute("""
@@ -767,7 +737,6 @@ TABLAS_BACKUP = [
     "usuarios",
     "materias",
     "correlatividades",
-    "historial_plan_estudios",
     "alumno_materias",
     "codigos_invitacion",
     "recursos",
@@ -961,199 +930,3 @@ def restaurar_backup_sql(contenido, modo_espejo=False):
     return {"ok_total": ok_total, "error_total": error_total, "errores": errores, "borradas": borradas}
 
 
-
-# ─── Gestión del plan de estudios (Administración) ──────────────────────────
-# Ítem "Gestión de cambios al plan de estudios", 22/09/2026. Antes el plan
-# solo se cargaba una vez con seed_materias.py; cualquier cambio requería
-# tocar Neon a mano con SQL. Cada función de acá registra su propio renglón
-# en historial_plan_estudios y limpia get_materias_data_completo +
-# get_home_data_completo, que son las dos únicas cachés que dependen de
-# `materias` para Plan de Estudios, Correlatividades y los contadores de
-# Home. El backup automático NO vive acá: se genera en app.py, justo antes
-# de llamar a cada una de estas funciones, reutilizando generar_backup_sql()
-# ya existente (así el backup siempre queda de ANTES del cambio, no después).
-#
-# Alcance actual (confirmado 22/09/2026): solo Plan de Estudios y
-# Correlatividades filtran por `vigente`. Los selectores de materia de
-# cursadas, evaluaciones, historial, profesores y recursos quedan sin tocar
-# por ahora.
-
-@st.cache_data(ttl=60)
-def get_materias_admin(carrera_id):
-    """
-    Todas las materias de la carrera (vigentes y no vigentes), para el panel
-    de Administración. A diferencia de get_materias_data_completo(), acá no
-    se filtra por `vigente`: el admin tiene que poder ver y reactivar una
-    materia dada de baja, no solo las que ve un alumno.
-    Devuelve (materias, correlativas_map), materias con formato
-    (id, nombre, anio, cuatrimestre, final_obligatorio, es_electiva, vigente).
-    """
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute("""
-                SELECT id, nombre, anio, cuatrimestre, final_obligatorio, es_electiva, vigente
-                FROM materias
-                WHERE carrera_id = %s
-                ORDER BY anio, cuatrimestre, nombre;
-            """, (carrera_id,))
-            materias = cur.fetchall()
-
-            cur.execute("""
-                SELECT co.materia_id, r.id, r.nombre
-                FROM correlatividades co
-                JOIN materias m ON m.id = co.materia_id
-                JOIN materias r ON r.id = co.requiere_materia_id
-                WHERE m.carrera_id = %s
-                ORDER BY r.anio, r.nombre;
-            """, (carrera_id,))
-            correlativas_map = {}
-            for materia_id, requiere_id, requiere_nombre in cur.fetchall():
-                correlativas_map.setdefault(materia_id, []).append((requiere_id, requiere_nombre))
-
-    return materias, correlativas_map
-
-
-def crear_materia(carrera_id, codigo, nombre, anio, cuatrimestre,
-                   final_obligatorio, es_electiva, realizado_por):
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute("""
-                INSERT INTO materias (carrera_id, codigo, nombre, anio, cuatrimestre,
-                                       final_obligatorio, es_electiva, vigente)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, TRUE)
-                RETURNING id;
-            """, (carrera_id, codigo, nombre, anio, cuatrimestre, final_obligatorio, es_electiva))
-            materia_id = cur.fetchone()[0]
-            cur.execute("""
-                INSERT INTO historial_plan_estudios (tipo_cambio, materia_id, detalle, realizado_por)
-                VALUES ('alta', %s, %s, %s);
-            """, (materia_id, f"Alta de materia: {nombre} ({anio}° año, cuatrimestre {cuatrimestre})", realizado_por))
-        conn.commit()
-    get_materias_data_completo.clear()
-    get_materias_admin.clear()
-    get_home_data_completo.clear()
-    get_historial_plan_estudios.clear()
-    get_resumen_plan_estudios.clear()
-    return materia_id
-
-
-def editar_materia(materia_id, codigo, nombre, anio, cuatrimestre,
-                    final_obligatorio, es_electiva, realizado_por):
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute("""
-                SELECT codigo, nombre, anio, cuatrimestre, final_obligatorio, es_electiva
-                FROM materias WHERE id = %s;
-            """, (materia_id,))
-            anterior = cur.fetchone()
-            cur.execute("""
-                UPDATE materias
-                SET codigo=%s, nombre=%s, anio=%s, cuatrimestre=%s,
-                    final_obligatorio=%s, es_electiva=%s
-                WHERE id = %s;
-            """, (codigo, nombre, anio, cuatrimestre, final_obligatorio, es_electiva, materia_id))
-
-            campos = ["codigo", "nombre", "anio", "cuatrimestre", "final_obligatorio", "es_electiva"]
-            nuevo = (codigo, nombre, anio, cuatrimestre, final_obligatorio, es_electiva)
-            cambios = [f"{c}: {va!r} → {vn!r}" for c, va, vn in zip(campos, anterior, nuevo) if va != vn]
-            detalle = "; ".join(cambios) if cambios else "Guardado sin cambios detectados"
-
-            cur.execute("""
-                INSERT INTO historial_plan_estudios (tipo_cambio, materia_id, detalle, realizado_por)
-                VALUES ('edicion', %s, %s, %s);
-            """, (materia_id, detalle, realizado_por))
-        conn.commit()
-    get_materias_data_completo.clear()
-    get_materias_admin.clear()
-    get_home_data_completo.clear()
-    get_historial_plan_estudios.clear()
-    get_resumen_plan_estudios.clear()
-
-
-def cambiar_vigencia_materia(materia_id, vigente, realizado_por):
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute("UPDATE materias SET vigente = %s WHERE id = %s;", (vigente, materia_id))
-            tipo = "reactivacion" if vigente else "baja"
-            detalle = "Reactivada como vigente" if vigente else "Marcada como no vigente"
-            cur.execute("""
-                INSERT INTO historial_plan_estudios (tipo_cambio, materia_id, detalle, realizado_por)
-                VALUES (%s, %s, %s, %s);
-            """, (tipo, materia_id, detalle, realizado_por))
-        conn.commit()
-    get_materias_data_completo.clear()
-    get_materias_admin.clear()
-    get_home_data_completo.clear()
-    get_historial_plan_estudios.clear()
-    get_resumen_plan_estudios.clear()
-
-
-def actualizar_correlativas_materia(materia_id, requiere_ids, realizado_por):
-    """Reemplaza por completo la lista de correlativas de `materia_id`."""
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute("""
-                SELECT r.nombre FROM correlatividades co
-                JOIN materias r ON r.id = co.requiere_materia_id
-                WHERE co.materia_id = %s ORDER BY r.nombre;
-            """, (materia_id,))
-            anteriores = [r[0] for r in cur.fetchall()]
-
-            cur.execute("DELETE FROM correlatividades WHERE materia_id = %s;", (materia_id,))
-            for req_id in requiere_ids:
-                cur.execute("""
-                    INSERT INTO correlatividades (materia_id, requiere_materia_id)
-                    VALUES (%s, %s);
-                """, (materia_id, req_id))
-
-            nuevas = []
-            if requiere_ids:
-                cur.execute("SELECT nombre FROM materias WHERE id = ANY(%s) ORDER BY nombre;", (requiere_ids,))
-                nuevas = [r[0] for r in cur.fetchall()]
-
-            detalle = f"Correlativas: [{', '.join(anteriores) or 'ninguna'}] → [{', '.join(nuevas) or 'ninguna'}]"
-            cur.execute("""
-                INSERT INTO historial_plan_estudios (tipo_cambio, materia_id, detalle, realizado_por)
-                VALUES ('correlativas', %s, %s, %s);
-            """, (materia_id, detalle, realizado_por))
-        conn.commit()
-    get_materias_data_completo.clear()
-    get_materias_admin.clear()
-    get_home_data_completo.clear()
-    get_historial_plan_estudios.clear()
-    get_resumen_plan_estudios.clear()
-
-
-@st.cache_data(ttl=60)
-def get_historial_plan_estudios(carrera_id, limite=50):
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute("""
-                SELECT h.created_at, h.tipo_cambio, m.nombre, h.detalle, u.nombre
-                FROM historial_plan_estudios h
-                LEFT JOIN materias m ON m.id = h.materia_id
-                LEFT JOIN usuarios u ON u.id = h.realizado_por
-                WHERE m.carrera_id = %s
-                ORDER BY h.created_at DESC
-                LIMIT %s;
-            """, (carrera_id, limite))
-            return cur.fetchall()
-
-
-@st.cache_data(ttl=60)
-def get_resumen_plan_estudios(carrera_id):
-    """(vigentes, no_vigentes, ultima_edicion) para el botón 'Revisar plan de estudios'."""
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute("""
-                SELECT COUNT(*) FILTER (WHERE vigente), COUNT(*) FILTER (WHERE NOT vigente)
-                FROM materias WHERE carrera_id = %s;
-            """, (carrera_id,))
-            vigentes, no_vigentes = cur.fetchone()
-            cur.execute("""
-                SELECT MAX(h.created_at) FROM historial_plan_estudios h
-                JOIN materias m ON m.id = h.materia_id
-                WHERE m.carrera_id = %s;
-            """, (carrera_id,))
-            ultima_edicion = cur.fetchone()[0]
-    return vigentes, no_vigentes, ultima_edicion

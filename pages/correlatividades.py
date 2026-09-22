@@ -54,6 +54,29 @@ LEYENDA = (
     "🟢 Aprobada / Promocionada · 🔴 Desaprobada"
 )
 
+# Colores para las flechas del mapa, según la materia de la que salen.
+# Si una materia tiene una sola flecha saliente, se queda en el gris
+# neutro (COLOR_FLECHA_NEUTRO): no hace falta destacarla, y así no se
+# satura de color un gráfico que ya usa colores para el estado de cada
+# materia. Si una materia habilita dos o más materias, todas esas
+# flechas comparten un color propio de esta paleta, distinto al de las
+# demás materias con múltiples salidas. Si hay más materias con múltiples
+# salidas que colores, la paleta rota. Son tonos con buen contraste tanto
+# en modo claro como oscuro.
+PALETA_FLECHAS = [
+    "#2563EB",  # azul
+    "#DC2626",  # rojo
+    "#059669",  # verde
+    "#D97706",  # naranja
+    "#7C3AED",  # violeta
+    "#DB2777",  # rosa
+    "#0891B2",  # celeste
+    "#65A30D",  # verde lima
+    "#9333EA",  # púrpura
+    "#B45309",  # marrón/ocre
+]
+COLOR_FLECHA_NEUTRO = "#8B8BA7"
+
 
 def _nombre_anio(anio):
     return NOMBRES_ANIO.get(anio, f"Año {anio}")
@@ -121,7 +144,7 @@ def armar_dot(materias, estados_map, correlativas_map, anio_desde, anio_hasta, e
         '  node [shape=box, style="rounded,filled", fontname="Helvetica", '
         'fontsize=11, fontcolor="#1F2937", color="#6B7280", margin="0.15,0.08"];'
     )
-    lineas.append('  edge [color="#8B8BA7", arrowsize=0.7];')
+    lineas.append("  edge [arrowsize=0.7];")
 
     for mid, m in en_rango.items():
         _, nombre, anio, _cuatri, _final, _electiva = m
@@ -131,12 +154,30 @@ def armar_dot(materias, estados_map, correlativas_map, anio_desde, anio_hasta, e
             f'  m{mid} [label="{_etiqueta_nodo(nombre, anio)}", fillcolor="{color}"];'
         )
 
-    flechas = 0
+    # Armamos primero la lista de flechas (origen -> destino) para poder
+    # contar cuántas salen de cada materia antes de asignarles color.
+    conexiones = []
     for mid in en_rango:
         for req_id, _req_nombre in correlativas_map.get(mid, []):
             if req_id in en_rango:
-                lineas.append(f"  m{req_id} -> m{mid};")
-                flechas += 1
+                conexiones.append((req_id, mid))
+
+    salientes_por_origen = {}
+    for origen, _destino in conexiones:
+        salientes_por_origen[origen] = salientes_por_origen.get(origen, 0) + 1
+
+    color_por_origen = {}
+    color_idx = 0
+    for origen, cantidad in salientes_por_origen.items():
+        if cantidad >= 2:
+            color_por_origen[origen] = PALETA_FLECHAS[color_idx % len(PALETA_FLECHAS)]
+            color_idx += 1
+
+    for origen, destino in conexiones:
+        color = color_por_origen.get(origen, COLOR_FLECHA_NEUTRO)
+        lineas.append(f'  m{origen} -> m{destino} [color="{color}"];')
+
+    flechas = len(conexiones)
 
     lineas.append("}")
     return "\n".join(lineas), len(en_rango), flechas

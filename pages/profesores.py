@@ -1,3 +1,7 @@
+# profesores.py - 24.09.2026
+
+import re
+import unicodedata
 import streamlit as st
 from db import get_conn
 from utils import NOMBRES_ANIO
@@ -155,6 +159,70 @@ def eliminar_recomendacion_tercero(recomendacion_id):
         conn.commit()
     get_profesores_data_completo.clear()
 
+# ─── Listados "Positivos" y "Negativos" (24/09/2026) ────────────────────────
+# Agrupa a todos los profesores por 👍 / 👎 sumando tus opiniones propias
+# (opiniones_profesores) y las recomendaciones de terceros, sin importar
+# quién hizo el comentario. NO abre ninguna consulta nueva: trabaja sobre
+# los datos que ya trae get_profesores_data_completo(), así que no suma
+# latencia y se actualiza solo cuando esas funciones limpian el caché.
+#
+# Criterio 👍/👎: el mismo que ya usan las otras tabs — un profesor es 👍 si
+# tiene al menos tantas opiniones "Recomendado" como "No recomendado"
+# (un empate cuenta como 👍).
+#
+# Unión de nombres: en tus opiniones el profesor es un solo texto libre y en
+# las de terceros van apellido y nombre por separado. Para reconocer al
+# mismo profesor se comparan los nombres sin tildes, sin mayúsculas, sin
+# signos y sin importar el orden ("Pérez, Juan" = "Juan Pérez"). Variantes
+# como "J. Pérez" o con segundo nombre se leen como profesores distintos.
+
+def _sin_tildes_minusculas(texto):
+    descompuesto = unicodedata.normalize("NFD", texto or "")
+    return "".join(c for c in descompuesto if unicodedata.category(c) != "Mn").lower()
+
+def _clave_profesor(texto):
+    limpio = re.sub(r"[^\w\s]", " ", _sin_tildes_minusculas(texto))
+    return " ".join(sorted(limpio.split()))
+
+def agrupar_por_reputacion(opiniones, recomendaciones):
+    """
+    Devuelve (positivos, negativos): dos listas de nombres para mostrar,
+    ordenadas alfabéticamente.
+    """
+    profesores = {}
+
+    # Primero las de terceros, para que el nombre a mostrar quede como
+    # "Apellido, Nombre" cuando el profesor aparece en ambos orígenes.
+    for r in recomendaciones:
+        apellido, nombre, valoracion = r[1], r[2], r[3]
+        clave = _clave_profesor(f"{apellido} {nombre}")
+        if not clave:
+            continue
+        datos = profesores.setdefault(
+            clave, {"nombre": f"{apellido.strip()}, {nombre.strip()}", "pos": 0, "neg": 0}
+        )
+        if valoracion == "Recomendado":
+            datos["pos"] += 1
+        else:
+            datos["neg"] += 1
+
+    for op in opiniones:
+        profesor, valoracion = op[1], op[2]
+        clave = _clave_profesor(profesor)
+        if not clave:
+            continue
+        datos = profesores.setdefault(clave, {"nombre": profesor.strip(), "pos": 0, "neg": 0})
+        if valoracion == "Recomendado":
+            datos["pos"] += 1
+        else:
+            datos["neg"] += 1
+
+    positivos = [d["nombre"] for d in profesores.values() if d["pos"] >= d["neg"]]
+    negativos = [d["nombre"] for d in profesores.values() if d["pos"] < d["neg"]]
+    positivos.sort(key=_sin_tildes_minusculas)
+    negativos.sort(key=_sin_tildes_minusculas)
+    return positivos, negativos
+
 def mostrar(usuario):
     if not usuario:
         st.switch_page("app.py")
@@ -172,10 +240,12 @@ def mostrar(usuario):
     )
     opciones = {f"{NOMBRES_ANIO.get(m[2], '')} — {m[1]}": m[0] for m in todas}
 
-    tab1, tab2, tab3 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5 = st.tabs([
         "📋 Mis opiniones",
         "➕ Agregar opinión",
         "🗣️ Profesores recomendados por terceros",
+        "👍 Positivos",
+        "👎 Negativos",
     ])
 
     with tab1:
@@ -472,3 +542,24 @@ def mostrar(usuario):
                                 st.caption(f"Cargado por: {e_cargado_por_nombre or 'otro alumno'}")
 
                         st.markdown("---")
+
+    # ── Tabs "Positivos" y "Negativos" (24/09/2026) ────────────────────────
+    # Se calculan en memoria con los datos que ya trajo el batch de arriba,
+    # sin ninguna consulta nueva. Ver agrupar_por_reputacion().
+    positivos, negativos = agrupar_por_reputacion(opiniones_todas, recomendaciones)
+
+    with tab4:
+        if not positivos:
+            st.info("Todavía no hay profesores con reputación positiva.")
+        else:
+            st.caption(f"{len(positivos)} profesor(es) con 👍")
+            for nombre_prof in positivos:
+                st.markdown(f"👍 {nombre_prof}")
+
+    with tab5:
+        if not negativos:
+            st.info("Todavía no hay profesores con reputación negativa.")
+        else:
+            st.caption(f"{len(negativos)} profesor(es) con 👎")
+            for nombre_prof in negativos:
+                st.markdown(f"👎 {nombre_prof}")

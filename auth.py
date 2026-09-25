@@ -1,10 +1,11 @@
-# auth.py - 01/09/2026
+# auth.py - 25.09.2026
 
 import bcrypt
 import streamlit as st
 from db import get_conn
 import secrets
 from datetime import datetime, timedelta
+from email_validator import validate_email, EmailNotValidError
 from emails import enviar_email_recuperacion
 
 # ─── Rate limiting de login ─────────────────────────────────────────────────
@@ -34,6 +35,25 @@ def hash_password(password):
 
 def verify_password(password, hashed):
     return bcrypt.checkpw(password.encode(), hashed.encode())
+
+# ─── Validación de formato de email al registrarse (ítem prioridad media,
+# próximo en la lista de Mejoras Pendientes, 25/09/2026) ───────────────────
+# Antes register_user() no chequeaba nada sobre el formato del email: si el
+# alumno se equivocaba al tipearlo, el único momento en que se notaba era
+# más adelante, cuando fallaba el envío del email de recuperación de
+# contraseña — un mensaje de error bastante lejos del momento real del
+# error. Se usa la librería email-validator (agregarla a requirements.txt)
+# en vez de una regex casera, porque cubre casos raros de formato (dominios
+# internacionales, longitud, etc.) sin tener que mantenerlos a mano acá.
+# check_deliverability=False: no se intenta resolver el dominio por DNS,
+# solo se valida la sintaxis — no tiene sentido pegarle a un servidor DNS
+# externo en cada registro solo para chequear el formato.
+def es_email_valido(email):
+    try:
+        validate_email(email, check_deliverability=False)
+        return True, None
+    except EmailNotValidError as e:
+        return False, str(e)
 
 def get_carreras():
     with get_conn() as conn:
@@ -93,15 +113,26 @@ def marcar_codigo_usado(codigo, usuario_id):
 # de toda la transacción (incluyendo el INSERT del usuario, que también
 # queda deshecho), así que no se puede quedar un usuario creado sin un
 # código válido detrás.
+#
+# ── Validación de email (25/09/2026) ────────────────────────────────────
+# Se chequea el formato ANTES de abrir la conexión/transacción de arriba,
+# para no gastar ni una consulta a la base con un email que ya sabemos que
+# está mal escrito.
 def register_user(email, password, nombre, carrera_id, codigo):
     codigo_norm = codigo.strip()
+    email_norm = email.lower().strip()
+
+    valido, error_validacion = es_email_valido(email_norm)
+    if not valido:
+        return False, f"El email ingresado no es válido: {error_validacion}"
+
     with get_conn() as conn:
         with conn.cursor() as cur:
             try:
                 password_hash = hash_password(password)
                 cur.execute(
                     "INSERT INTO usuarios (email, password_hash, nombre, carrera_id) VALUES (%s, %s, %s, %s) RETURNING id;",
-                    (email.lower().strip(), password_hash, nombre.strip(), carrera_id)
+                    (email_norm, password_hash, nombre.strip(), carrera_id)
                 )
                 usuario_id = cur.fetchone()[0]
 

@@ -1,4 +1,4 @@
-# profesores.py - 24.09.2026
+# profesores.py - 26.09.2026
 
 import re
 import unicodedata
@@ -28,6 +28,16 @@ VALORACIONES = ["Recomendado", "No recomendado"]
 # Invalidación de caché: agregar_opinion/actualizar_opinion/eliminar_opinion
 # y agregar_recomendacion_tercero/actualizar_recomendacion_tercero/
 # eliminar_recomendacion_tercero limpian este caché (ver más abajo).
+#
+# ── Fix "Cambio de Opiniones" (26/09/2026) ──────────────────────────────
+# `opiniones` ahora incluye también op.materia_id (antes solo traía el
+# nombre y el año de la materia vía el JOIN), porque sin el id no se podía
+# armar el selector para cambiarle la materia a una opinión ya cargada.
+# Formato de fila nuevo: (id, profesor, valoracion, observaciones,
+# materia_id, materia_nombre, materia_anio) — se agregó materia_id como
+# 5° elemento, así que cualquier código que ya desestructuraba esta tupla
+# por posición para profesor/valoracion (índices 1 y 2) sigue funcionando
+# igual.
 
 @st.cache_data(ttl=60)
 def get_profesores_data_completo(usuario_id, carrera_id):
@@ -35,10 +45,10 @@ def get_profesores_data_completo(usuario_id, carrera_id):
     Devuelve, en una sola conexión, todo lo que necesita pages/profesores.py:
     (todas_materias, opiniones, recomendaciones_terceros)
     - todas_materias: [(id, nombre, anio), ...]
-    - opiniones: [(id, profesor, valoracion, observaciones, materia_nombre, materia_anio), ...]
+    - opiniones: [(id, profesor, valoracion, observaciones, materia_id,
+      materia_nombre, materia_anio), ...]
     - recomendaciones_terceros: [(id, apellido, nombre, valoracion, observaciones,
       cargado_por, cargado_por_nombre, materia_ids, materia_nombres, materia_anios), ...]
-    Mismo formato de fila que devolvían las 3 funciones originales.
     """
     with get_conn() as conn:
         with conn.cursor() as cur:
@@ -52,7 +62,8 @@ def get_profesores_data_completo(usuario_id, carrera_id):
 
             # ── Opiniones propias del alumno (privadas) ──────────────────
             cur.execute("""
-                SELECT op.id, op.profesor, op.valoracion, op.observaciones, m.nombre, m.anio
+                SELECT op.id, op.profesor, op.valoracion, op.observaciones,
+                       m.id, m.nombre, m.anio
                 FROM opiniones_profesores op
                 JOIN materias m ON op.materia_id = m.id
                 WHERE op.usuario_id = %s
@@ -90,13 +101,19 @@ def agregar_opinion(usuario_id, materia_id, profesor, valoracion, observaciones)
         conn.commit()
     get_profesores_data_completo.clear()
 
-def actualizar_opinion(opinion_id, valoracion, observaciones):
+def actualizar_opinion(opinion_id, materia_id, valoracion, observaciones):
+    """
+    Ítem "Cambio de Opiniones" (26/09/2026): ahora también actualiza la
+    materia de la opinión (antes solo tocaba valoración y observaciones,
+    por eso no se podía corregir una materia mal cargada).
+    """
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute("""
-                UPDATE opiniones_profesores SET valoracion = %s, observaciones = %s
+                UPDATE opiniones_profesores
+                SET materia_id = %s, valoracion = %s, observaciones = %s
                 WHERE id = %s;
-            """, (valoracion, observaciones, opinion_id))
+            """, (materia_id, valoracion, observaciones, opinion_id))
         conn.commit()
     get_profesores_data_completo.clear()
 
@@ -240,12 +257,13 @@ def mostrar(usuario):
     )
     opciones = {f"{NOMBRES_ANIO.get(m[2], '')} — {m[1]}": m[0] for m in todas}
 
-    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
         "📋 Mis opiniones",
         "➕ Agregar opinión",
         "🗣️ Profesores recomendados por terceros",
         "👍 Positivos",
         "👎 Negativos",
+        "🔄 Cambio de Opiniones",
     ])
 
     with tab1:
@@ -268,7 +286,7 @@ def mostrar(usuario):
             else:
                 por_profesor = {}
                 for op in opiniones:
-                    oid, profesor, valoracion, observaciones, materia_nombre, materia_anio = op
+                    oid, profesor, valoracion, observaciones, materia_id, materia_nombre, materia_anio = op
                     if profesor not in por_profesor:
                         por_profesor[profesor] = []
                     por_profesor[profesor].append(op)
@@ -280,7 +298,7 @@ def mostrar(usuario):
 
                     with st.expander(f"{icono_prof} {profesor} ({len(ops)} materia{'s' if len(ops) > 1 else ''})"):
                         for op in ops:
-                            oid, _, valoracion, observaciones, materia_nombre, materia_anio = op
+                            oid, _, valoracion, observaciones, materia_id, materia_nombre, materia_anio = op
                             key_edit_op = f"editando_opinion_{oid}"
                             anio_texto = NOMBRES_ANIO.get(materia_anio, f"Año {materia_anio}")
 
@@ -307,7 +325,10 @@ def mostrar(usuario):
                                         cancelar_op_edit = st.form_submit_button("❌ Cancelar", use_container_width=True)
 
                                 if guardar_op_edit:
-                                    actualizar_opinion(oid, nueva_valoracion, nuevas_obs.strip())
+                                    # Esta edición rápida no toca la materia (para eso
+                                    # está la tab "🔄 Cambio de Opiniones"): se le pasa
+                                    # el mismo materia_id que ya tenía.
+                                    actualizar_opinion(oid, materia_id, nueva_valoracion, nuevas_obs.strip())
                                     st.session_state[key_edit_op] = False
                                     st.success("Opinión actualizada.")
                                     st.rerun()
@@ -563,3 +584,114 @@ def mostrar(usuario):
             st.caption(f"{len(negativos)} profesor(es) con 👎")
             for nombre_prof in negativos:
                 st.markdown(f"👎 {nombre_prof}")
+
+    # ── Tab "Cambio de Opiniones" (26/09/2026) ──────────────────────────────
+    # Pantalla dedicada para corregir una opinión de punta a punta: elegís el
+    # profesor, ves todas las materias que le cargaste, y para cada una podés
+    # cambiar la materia (no solo valoración/observaciones, que era lo único
+    # editable desde "Mis opiniones") o borrarla. Abajo hay un formulario para
+    # agregarle una materia nueva al mismo profesor, sin tener que ir a la tab
+    # "➕ Agregar opinión" y volver a tipear el nombre.
+    #
+    # No abre ninguna consulta nueva: trabaja sobre opiniones_todas, que ya
+    # trajo el batch de arriba.
+    with tab6:
+        st.caption(
+            "Elegí un profesor para agregarle una materia nueva, o para cambiarle la "
+            "materia, la valoración o las observaciones a una opinión ya cargada."
+        )
+
+        if not opiniones_todas:
+            st.info("Todavía no cargaste ninguna opinión.")
+        else:
+            profesores_propios = sorted(
+                set(op[1] for op in opiniones_todas), key=_sin_tildes_minusculas
+            )
+            profesor_sel = st.selectbox(
+                "Profesor/a", profesores_propios, key="cambio_op_profesor_sel"
+            )
+
+            opiniones_prof = [op for op in opiniones_todas if op[1] == profesor_sel]
+            materias_ya_ids = {op[4] for op in opiniones_prof}
+
+            st.markdown(f"**Materias cargadas para {profesor_sel}:**")
+            for op in opiniones_prof:
+                oid, _, valoracion, observaciones, materia_id, materia_nombre, materia_anio = op
+                anio_texto = NOMBRES_ANIO.get(materia_anio, f"Año {materia_anio}")
+                materia_label_actual = f"{anio_texto} — {materia_nombre}"
+
+                with st.expander(f"{anio_texto}: {materia_nombre} — {valoracion}"):
+                    with st.form(f"form_cambio_op_{oid}"):
+                        idx_actual = (
+                            list(opciones.keys()).index(materia_label_actual)
+                            if materia_label_actual in opciones else 0
+                        )
+                        nueva_materia_label = st.selectbox(
+                            "Materia", list(opciones.keys()), index=idx_actual,
+                            key=f"cambio_op_materia_{oid}"
+                        )
+                        nueva_valoracion = st.radio(
+                            "Valoración", VALORACIONES,
+                            index=VALORACIONES.index(valoracion) if valoracion in VALORACIONES else 0,
+                            horizontal=True, key=f"cambio_op_val_{oid}"
+                        )
+                        nuevas_obs = st.text_area(
+                            "Observaciones (opcional)", value=observaciones or "",
+                            height=100, key=f"cambio_op_obs_{oid}"
+                        )
+                        col_g, col_b = st.columns(2)
+                        with col_g:
+                            guardar_cambio = st.form_submit_button("💾 Guardar cambios", use_container_width=True)
+                        with col_b:
+                            borrar_cambio = st.form_submit_button("🗑️ Borrar esta opinión", use_container_width=True)
+
+                    if guardar_cambio:
+                        nueva_materia_id = opciones[nueva_materia_label]
+                        # Si eligió una materia que ese mismo profesor ya tiene
+                        # cargada en OTRA opinión, no lo dejamos duplicarla.
+                        otras_materias_ids = {o[4] for o in opiniones_prof if o[0] != oid}
+                        if nueva_materia_id in otras_materias_ids:
+                            st.error("Ese profesor ya tiene una opinión cargada para esa materia.")
+                        else:
+                            actualizar_opinion(oid, nueva_materia_id, nueva_valoracion, nuevas_obs.strip())
+                            st.success("Opinión actualizada.")
+                            st.rerun()
+                    if borrar_cambio:
+                        eliminar_opinion(oid)
+                        st.success("Opinión borrada.")
+                        st.rerun()
+
+            st.markdown("---")
+            st.markdown(f"**➕ Agregar materia a {profesor_sel}**")
+
+            opciones_disponibles = {
+                lbl: mid for lbl, mid in opciones.items() if mid not in materias_ya_ids
+            }
+
+            if not opciones_disponibles:
+                st.caption("Ya cargaste todas las materias disponibles para este profesor.")
+            else:
+                if "form_cambio_nueva_key" not in st.session_state:
+                    st.session_state.form_cambio_nueva_key = 0
+                fkc = st.session_state.form_cambio_nueva_key
+
+                with st.form(f"form_cambio_nueva_materia_{fkc}"):
+                    nueva_materia_add = st.selectbox(
+                        "Materia", list(opciones_disponibles.keys()), key=f"cambio_nueva_materia_{fkc}"
+                    )
+                    valoracion_add = st.radio(
+                        "Valoración", VALORACIONES, horizontal=True, key=f"cambio_nueva_val_{fkc}"
+                    )
+                    obs_add = st.text_area(
+                        "Observaciones (opcional)", height=100, key=f"cambio_nueva_obs_{fkc}"
+                    )
+                    submit_add = st.form_submit_button("💾 Agregar materia", use_container_width=True)
+
+                if submit_add:
+                    materia_id_add = opciones_disponibles[nueva_materia_add]
+                    agregar_opinion(
+                        usuario["id"], materia_id_add, profesor_sel, valoracion_add, obs_add.strip()
+                    )
+                    st.session_state.form_cambio_nueva_key += 1
+                    st.success("✅ Materia agregada.")
+                    st.rerun()

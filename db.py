@@ -1,5 +1,4 @@
-
-# db.py - 20/09/2026
+# db.py - 27.09.2026
 
 import os
 import re
@@ -294,6 +293,42 @@ def init_db():
             observaciones TEXT,
             created_at TIMESTAMP DEFAULT NOW()
         );
+    """)
+
+    # ── Opiniones propias: hasta 3 materias por opinión (ítem pedido
+    # 27/09/2026) ────────────────────────────────────────────────────────
+    # Antes, cada fila de opiniones_profesores representaba una sola materia
+    # de un profesor (si un profesor dictaba 3 materias, eran 3 filas
+    # separadas, cada una con su propia valoración/observación aunque en la
+    # práctica fueran la misma opinión repetida). Ahora una misma opinión
+    # puede cubrir hasta 3 materias del mismo profesor con una sola
+    # valoración/observación, así que hace falta una tabla puente — mismo
+    # patrón que ya existe para recomendaciones_terceros_materias.
+    #
+    # La columna opiniones_profesores.materia_id NO se borra (para no hacer
+    # un cambio destructivo sobre datos existentes), pero deja de usarse
+    # para altas nuevas: profesores.py ya no la completa, las opiniones
+    # nuevas se asocian a sus materias solo a través de esta tabla puente.
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS opiniones_profesores_materias (
+            id SERIAL PRIMARY KEY,
+            opinion_id INTEGER REFERENCES opiniones_profesores(id) ON DELETE CASCADE,
+            materia_id INTEGER REFERENCES materias(id),
+            UNIQUE(opinion_id, materia_id)
+        );
+    """)
+
+    # Migración automática de las opiniones cargadas antes de este cambio:
+    # su materia vive en la columna vieja opiniones_profesores.materia_id,
+    # así que se copia acá una sola vez. El WHERE materia_id IS NOT NULL
+    # evita que esto vuelva a insertar filas de más en cada reinicio de la
+    # app: las opiniones nuevas ya no completan esa columna (queda NULL),
+    # así que no matchean este WHERE y el ON CONFLICT tampoco reinserta las
+    # que ya se migraron.
+    cur.execute("""
+        INSERT INTO opiniones_profesores_materias (opinion_id, materia_id)
+        SELECT id, materia_id FROM opiniones_profesores WHERE materia_id IS NOT NULL
+        ON CONFLICT (opinion_id, materia_id) DO NOTHING;
     """)
 
     # Recomendaciones de profesores hechas "por terceros": a diferencia de
@@ -746,6 +781,7 @@ TABLAS_BACKUP = [
     "tareas",
     "asistencias",
     "opiniones_profesores",
+    "opiniones_profesores_materias",
     "recomendaciones_terceros",
     "recomendaciones_terceros_materias",
     "programas",
@@ -928,5 +964,3 @@ def restaurar_backup_sql(contenido, modo_espejo=False):
 
     get_uso_almacenamiento.clear()
     return {"ok_total": ok_total, "error_total": error_total, "errores": errores, "borradas": borradas}
-
-

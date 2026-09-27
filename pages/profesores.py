@@ -1,4 +1,4 @@
-# profesores.py - 26.09.2026
+# profesores.py - 27.09.2026
 
 import re
 import unicodedata
@@ -101,19 +101,23 @@ def agregar_opinion(usuario_id, materia_id, profesor, valoracion, observaciones)
         conn.commit()
     get_profesores_data_completo.clear()
 
-def actualizar_opinion(opinion_id, materia_id, valoracion, observaciones):
+def actualizar_opinion(opinion_id, materia_id, profesor, valoracion, observaciones):
     """
-    Ítem "Cambio de Opiniones" (26/09/2026): ahora también actualiza la
-    materia de la opinión (antes solo tocaba valoración y observaciones,
-    por eso no se podía corregir una materia mal cargada).
+    Actualiza los cuatro campos editables de una opinión: profesor, materia,
+    valoración y observaciones. Antes de esta corrección (27/09/2026), la
+    función solo tocaba materia_id/valoracion/observaciones, y el formulario
+    de edición de "📋 Mis opiniones" ni siquiera exponía el campo materia
+    (solo se podía cambiar desde la tab "🔄 Cambio de Opiniones"). Se agregó
+    `profesor` como parámetro para que el editar desde "Mis opiniones" tenga
+    los mismos cuatro campos que "➕ Agregar opinión".
     """
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute("""
                 UPDATE opiniones_profesores
-                SET materia_id = %s, valoracion = %s, observaciones = %s
+                SET profesor = %s, materia_id = %s, valoracion = %s, observaciones = %s
                 WHERE id = %s;
-            """, (materia_id, valoracion, observaciones, opinion_id))
+            """, (profesor, materia_id, valoracion, observaciones, opinion_id))
         conn.commit()
     get_profesores_data_completo.clear()
 
@@ -339,9 +343,26 @@ def mostrar(usuario):
                             anio_texto = NOMBRES_ANIO.get(materia_anio, f"Año {materia_anio}")
 
                             if st.session_state.get(key_edit_op):
-                                # ── Formulario de edición inline ──────────────────
+                                # ── Formulario de edición inline (27/09/2026: se
+                                # agregaron los campos "Profesor" y "Materia" — antes
+                                # solo se podía tocar valoración/observaciones desde
+                                # acá, y para cambiar materia o profesor había que ir
+                                # a la tab "🔄 Cambio de Opiniones". Ahora tiene los
+                                # mismos cuatro campos que "➕ Agregar opinión". ──────
                                 with st.form(f"form_edit_opinion_{oid}"):
                                     st.markdown(f"**✏️ Editando opinión — {anio_texto}: {materia_nombre}**")
+                                    nuevo_profesor = st.text_input(
+                                        "Nombre del profesor/a", value=profesor, key=f"edit_profesor_{oid}"
+                                    )
+                                    materia_label_actual = f"{anio_texto} — {materia_nombre}"
+                                    idx_materia_actual = (
+                                        list(opciones.keys()).index(materia_label_actual)
+                                        if materia_label_actual in opciones else 0
+                                    )
+                                    nueva_materia_label = st.selectbox(
+                                        "Materia que dicta", list(opciones.keys()),
+                                        index=idx_materia_actual, key=f"edit_materia_{oid}"
+                                    )
                                     nueva_valoracion = st.radio(
                                         "Valoración", VALORACIONES,
                                         index=VALORACIONES.index(valoracion) if valoracion in VALORACIONES else 0,
@@ -361,13 +382,23 @@ def mostrar(usuario):
                                         cancelar_op_edit = st.form_submit_button("❌ Cancelar", use_container_width=True)
 
                                 if guardar_op_edit:
-                                    # Esta edición rápida no toca la materia (para eso
-                                    # está la tab "🔄 Cambio de Opiniones"): se le pasa
-                                    # el mismo materia_id que ya tenía.
-                                    actualizar_opinion(oid, materia_id, nueva_valoracion, nuevas_obs.strip())
-                                    st.session_state[key_edit_op] = False
-                                    st.success("Opinión actualizada.")
-                                    st.rerun()
+                                    if not nuevo_profesor.strip():
+                                        st.error("Ingresá el nombre del profesor/a.")
+                                    else:
+                                        nueva_materia_id = opciones[nueva_materia_label]
+                                        # No dejar que este profesor quede con dos
+                                        # opiniones cargadas para la misma materia.
+                                        otras_materias_ids = {o[4] for o in ops if o[0] != oid}
+                                        if nueva_materia_id in otras_materias_ids:
+                                            st.error("Ya tenés una opinión cargada para ese profesor en esa materia.")
+                                        else:
+                                            actualizar_opinion(
+                                                oid, nueva_materia_id, nuevo_profesor.strip(),
+                                                nueva_valoracion, nuevas_obs.strip()
+                                            )
+                                            st.session_state[key_edit_op] = False
+                                            st.success("Opinión actualizada.")
+                                            st.rerun()
                                 if cancelar_op_edit:
                                     st.session_state[key_edit_op] = False
                                     st.rerun()
@@ -635,6 +666,12 @@ def mostrar(usuario):
     # agregarle una materia nueva al mismo profesor, sin tener que ir a la tab
     # "➕ Agregar opinión" y volver a tipear el nombre.
     #
+    # NOTA (27/09/2026): desde que "Mis opiniones" también permite cambiar
+    # materia y profesor directamente, esta tab quedó como una vista
+    # alternativa (todas las materias de un profesor juntas). No se toca:
+    # sigue siendo útil para revisar/corregir de punta a punta a un
+    # profesor con varias materias cargadas.
+    #
     # No abre ninguna consulta nueva: trabaja sobre opiniones_todas, que ya
     # trajo el batch de arriba.
     with tab6:
@@ -695,7 +732,7 @@ def mostrar(usuario):
                         if nueva_materia_id in otras_materias_ids:
                             st.error("Ese profesor ya tiene una opinión cargada para esa materia.")
                         else:
-                            actualizar_opinion(oid, nueva_materia_id, nueva_valoracion, nuevas_obs.strip())
+                            actualizar_opinion(oid, nueva_materia_id, profesor_sel, nueva_valoracion, nuevas_obs.strip())
                             st.success("Opinión actualizada.")
                             st.rerun()
                     if borrar_cambio:

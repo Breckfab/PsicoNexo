@@ -132,42 +132,78 @@ def eliminar_opinion(opinion_id):
 # profesor puede dictar hasta 5 materias, guardadas en la tabla puente
 # recomendaciones_terceros_materias. Solo quien cargó una recomendación
 # puede editarla o borrarla (agregado 29/07/2026).
+#
+# ── Manejo de errores en operaciones multi-INSERT (ítem prioridad media,
+# 26/09/2026) ────────────────────────────────────────────────────────────
+# Antes, agregar_recomendacion_tercero() y actualizar_recomendacion_tercero()
+# hacían un INSERT/UPDATE seguido de un loop de INSERTs sin try/except
+# propio: si un materia_id resultaba inválido (o cualquier otro error de
+# datos) a mitad del loop, el error se propagaba crudo a Streamlit en vez
+# de mostrar un mensaje entendible. get_conn() ya cubre el caso de que Neon
+# esté caído, pero no errores de datos.
+#
+# Ahora las dos funciones devuelven (ok: bool, mensaje: str) y envuelven
+# todo el bloque en un try/except con rollback explícito — mismo patrón
+# que ya usa register_user() en auth.py — así que un error a mitad de
+# camino no deja una recomendación a medio cargar (sin materias asociadas,
+# por ejemplo) y el alumno ve un mensaje claro en vez de un traceback.
 
 def agregar_recomendacion_tercero(usuario_id, apellido, nombre, valoracion, observaciones, materia_ids):
+    """
+    Devuelve (ok: bool, mensaje: str). Ver comentario arriba sobre el
+    manejo de errores en operaciones multi-INSERT (26/09/2026).
+    """
     with get_conn() as conn:
         with conn.cursor() as cur:
-            cur.execute("""
-                INSERT INTO recomendaciones_terceros (apellido, nombre, valoracion, observaciones, cargado_por)
-                VALUES (%s, %s, %s, %s, %s)
-                RETURNING id;
-            """, (apellido, nombre, valoracion, observaciones, usuario_id))
-            recomendacion_id = cur.fetchone()[0]
-            for materia_id in materia_ids:
+            try:
                 cur.execute("""
-                    INSERT INTO recomendaciones_terceros_materias (recomendacion_id, materia_id)
-                    VALUES (%s, %s)
-                    ON CONFLICT (recomendacion_id, materia_id) DO NOTHING;
-                """, (recomendacion_id, materia_id))
-        conn.commit()
+                    INSERT INTO recomendaciones_terceros (apellido, nombre, valoracion, observaciones, cargado_por)
+                    VALUES (%s, %s, %s, %s, %s)
+                    RETURNING id;
+                """, (apellido, nombre, valoracion, observaciones, usuario_id))
+                recomendacion_id = cur.fetchone()[0]
+                for materia_id in materia_ids:
+                    cur.execute("""
+                        INSERT INTO recomendaciones_terceros_materias (recomendacion_id, materia_id)
+                        VALUES (%s, %s)
+                        ON CONFLICT (recomendacion_id, materia_id) DO NOTHING;
+                    """, (recomendacion_id, materia_id))
+                conn.commit()
+            except Exception as e:
+                conn.rollback()
+                return False, f"No se pudo guardar la recomendación: {e}"
     get_profesores_data_completo.clear()
+    return True, "Recomendación guardada."
 
 def actualizar_recomendacion_tercero(recomendacion_id, apellido, nombre, valoracion, observaciones, materia_ids):
+    """
+    Devuelve (ok: bool, mensaje: str). Mismo criterio que
+    agregar_recomendacion_tercero() (ver comentario arriba): el UPDATE, el
+    DELETE de materias viejas y el loop de INSERTs nuevos corren en una
+    sola transacción explícita, con rollback garantizado si algo falla a
+    mitad de camino.
+    """
     with get_conn() as conn:
         with conn.cursor() as cur:
-            cur.execute("""
-                UPDATE recomendaciones_terceros
-                SET apellido = %s, nombre = %s, valoracion = %s, observaciones = %s
-                WHERE id = %s;
-            """, (apellido, nombre, valoracion, observaciones, recomendacion_id))
-            cur.execute("DELETE FROM recomendaciones_terceros_materias WHERE recomendacion_id = %s;", (recomendacion_id,))
-            for materia_id in materia_ids:
+            try:
                 cur.execute("""
-                    INSERT INTO recomendaciones_terceros_materias (recomendacion_id, materia_id)
-                    VALUES (%s, %s)
-                    ON CONFLICT (recomendacion_id, materia_id) DO NOTHING;
-                """, (recomendacion_id, materia_id))
-        conn.commit()
+                    UPDATE recomendaciones_terceros
+                    SET apellido = %s, nombre = %s, valoracion = %s, observaciones = %s
+                    WHERE id = %s;
+                """, (apellido, nombre, valoracion, observaciones, recomendacion_id))
+                cur.execute("DELETE FROM recomendaciones_terceros_materias WHERE recomendacion_id = %s;", (recomendacion_id,))
+                for materia_id in materia_ids:
+                    cur.execute("""
+                        INSERT INTO recomendaciones_terceros_materias (recomendacion_id, materia_id)
+                        VALUES (%s, %s)
+                        ON CONFLICT (recomendacion_id, materia_id) DO NOTHING;
+                    """, (recomendacion_id, materia_id))
+                conn.commit()
+            except Exception as e:
+                conn.rollback()
+                return False, f"No se pudo actualizar la recomendación: {e}"
     get_profesores_data_completo.clear()
+    return True, "Recomendación actualizada."
 
 def eliminar_recomendacion_tercero(recomendacion_id):
     with get_conn() as conn:
@@ -441,13 +477,16 @@ def mostrar(usuario):
                 elif not materia_ids_sel:
                     st.error("Seleccioná al menos una materia.")
                 else:
-                    agregar_recomendacion_tercero(
+                    ok_t, msg_t = agregar_recomendacion_tercero(
                         usuario["id"], t_apellido.strip(), t_nombre.strip(),
                         t_valoracion, t_observaciones.strip(), materia_ids_sel
                     )
-                    st.session_state.form_terceros_key += 1
-                    st.success("✅ Recomendación guardada. Ya la pueden ver todos los alumnos.")
-                    st.rerun()
+                    if ok_t:
+                        st.session_state.form_terceros_key += 1
+                        st.success("✅ Recomendación guardada. Ya la pueden ver todos los alumnos.")
+                        st.rerun()
+                    else:
+                        st.error(f"⚠️ {msg_t}")
 
         st.markdown("---")
 
@@ -526,13 +565,16 @@ def mostrar(usuario):
                                 elif not materia_ids_edit_sel:
                                     st.error("Seleccioná al menos una materia.")
                                 else:
-                                    actualizar_recomendacion_tercero(
+                                    ok_te, msg_te = actualizar_recomendacion_tercero(
                                         eid, ec_apellido.strip(), ec_nombre.strip(),
                                         ec_valoracion, ec_observaciones.strip(), materia_ids_edit_sel
                                     )
-                                    st.session_state[key_edit_t] = False
-                                    st.success("Recomendación actualizada.")
-                                    st.rerun()
+                                    if ok_te:
+                                        st.session_state[key_edit_t] = False
+                                        st.success(msg_te)
+                                        st.rerun()
+                                    else:
+                                        st.error(f"⚠️ {msg_te}")
                             if cancelar_t_edit:
                                 st.session_state[key_edit_t] = False
                                 st.rerun()

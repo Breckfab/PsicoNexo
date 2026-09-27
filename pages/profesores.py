@@ -21,23 +21,20 @@ VALORACIONES = ["Recomendado", "No recomendado"]
 # actualmente", Estadísticas) — en Neon serverless el costo real es el
 # round-trip de adquirir la conexión, no las queries en sí.
 #
-# Reemplaza a las 3 funciones cacheadas viejas (get_todas_materias,
-# get_opiniones, get_recomendaciones_terceros), eliminadas porque no las
-# usaba ningún otro módulo fuera de esta pantalla.
-#
-# Invalidación de caché: agregar_opinion/actualizar_opinion/eliminar_opinion
-# y agregar_recomendacion_tercero/actualizar_recomendacion_tercero/
-# eliminar_recomendacion_tercero limpian este caché (ver más abajo).
-#
-# ── Fix "Cambio de Opiniones" (26/09/2026) ──────────────────────────────
-# `opiniones` ahora incluye también op.materia_id (antes solo traía el
-# nombre y el año de la materia vía el JOIN), porque sin el id no se podía
-# armar el selector para cambiarle la materia a una opinión ya cargada.
-# Formato de fila nuevo: (id, profesor, valoracion, observaciones,
-# materia_id, materia_nombre, materia_anio) — se agregó materia_id como
-# 5° elemento, así que cualquier código que ya desestructuraba esta tupla
-# por posición para profesor/valoracion (índices 1 y 2) sigue funcionando
-# igual.
+# ── Opiniones propias: hasta 3 materias por opinión (ítem pedido
+# 27/09/2026) ────────────────────────────────────────────────────────────
+# Antes cada fila de opiniones_profesores era una sola materia de un
+# profesor. Ahora una misma opinión (una sola valoración/observación) puede
+# cubrir hasta 3 materias del mismo profesor, igual que ya funciona
+# "Recomendaciones de terceros" con hasta 5. Esto necesitó una tabla puente
+# nueva (opiniones_profesores_materias, ver db.py) con migración automática
+# de las opiniones viejas. El formato de la tupla `opiniones` cambió: ahora
+# `materia_ids`, `materia_nombres` y `materia_anios` son LISTAS (una por
+# cada materia de esa opinión), no un solo valor — formato nuevo:
+# (id, profesor, valoracion, observaciones, materia_ids, materia_nombres,
+# materia_anios). Cualquier código que compare op[1]/op[2] (profesor/
+# valoracion) sigue funcionando igual; lo que cambió es el acceso a la
+# materia (antes op[4]/op[5]/op[6] eran valores sueltos, ahora son listas).
 
 @st.cache_data(ttl=60)
 def get_profesores_data_completo(usuario_id, carrera_id):
@@ -45,8 +42,9 @@ def get_profesores_data_completo(usuario_id, carrera_id):
     Devuelve, en una sola conexión, todo lo que necesita pages/profesores.py:
     (todas_materias, opiniones, recomendaciones_terceros)
     - todas_materias: [(id, nombre, anio), ...]
-    - opiniones: [(id, profesor, valoracion, observaciones, materia_id,
-      materia_nombre, materia_anio), ...]
+    - opiniones: [(id, profesor, valoracion, observaciones, materia_ids,
+      materia_nombres, materia_anios), ...] — las tres últimas son listas,
+      porque una opinión puede cubrir hasta 3 materias (27/09/2026)
     - recomendaciones_terceros: [(id, apellido, nombre, valoracion, observaciones,
       cargado_por, cargado_por_nombre, materia_ids, materia_nombres, materia_anios), ...]
     """
@@ -63,11 +61,15 @@ def get_profesores_data_completo(usuario_id, carrera_id):
             # ── Opiniones propias del alumno (privadas) ──────────────────
             cur.execute("""
                 SELECT op.id, op.profesor, op.valoracion, op.observaciones,
-                       m.id, m.nombre, m.anio
+                       ARRAY_AGG(m.id ORDER BY m.anio, m.nombre) AS materia_ids,
+                       ARRAY_AGG(m.nombre ORDER BY m.anio, m.nombre) AS materia_nombres,
+                       ARRAY_AGG(m.anio ORDER BY m.anio, m.nombre) AS materia_anios
                 FROM opiniones_profesores op
-                JOIN materias m ON op.materia_id = m.id
+                JOIN opiniones_profesores_materias opm ON opm.opinion_id = op.id
+                JOIN materias m ON opm.materia_id = m.id
                 WHERE op.usuario_id = %s
-                ORDER BY op.profesor, m.anio, m.nombre;
+                GROUP BY op.id, op.profesor, op.valoracion, op.observaciones
+                ORDER BY op.profesor;
             """, (usuario_id,))
             opiniones = cur.fetchall()
 
@@ -91,37 +93,69 @@ def get_profesores_data_completo(usuario_id, carrera_id):
 
     return todas_materias, opiniones, recomendaciones_terceros
 
-def agregar_opinion(usuario_id, materia_id, profesor, valoracion, observaciones):
+def agregar_opinion(usuario_id, profesor, valoracion, observaciones, materia_ids):
+    """
+    Devuelve (ok: bool, mensaje: str). Crea una opinión y la asocia a hasta
+    3 materias en la tabla puente opiniones_profesores_materias (27/09/2026).
+    Mismo manejo de errores que agregar_recomendacion_tercero(): todo en una
+    transacción explícita, con rollback garantizado si algo falla a mitad
+    del loop de INSERTs.
+    """
     with get_conn() as conn:
         with conn.cursor() as cur:
-            cur.execute("""
-                INSERT INTO opiniones_profesores (usuario_id, materia_id, profesor, valoracion, observaciones)
-                VALUES (%s, %s, %s, %s, %s);
-            """, (usuario_id, materia_id, profesor, valoracion, observaciones))
-        conn.commit()
+            try:
+                cur.execute("""
+                    INSERT INTO opiniones_profesores (usuario_id, profesor, valoracion, observaciones)
+                    VALUES (%s, %s, %s, %s)
+                    RETURNING id;
+                """, (usuario_id, profesor, valoracion, observaciones))
+                opinion_id = cur.fetchone()[0]
+                for materia_id in materia_ids:
+                    cur.execute("""
+                        INSERT INTO opiniones_profesores_materias (opinion_id, materia_id)
+                        VALUES (%s, %s)
+                        ON CONFLICT (opinion_id, materia_id) DO NOTHING;
+                    """, (opinion_id, materia_id))
+                conn.commit()
+            except Exception as e:
+                conn.rollback()
+                return False, f"No se pudo guardar la opinión: {e}"
     get_profesores_data_completo.clear()
+    return True, "Opinión guardada."
 
-def actualizar_opinion(opinion_id, materia_id, profesor, valoracion, observaciones):
+def actualizar_opinion(opinion_id, profesor, valoracion, observaciones, materia_ids):
     """
-    Actualiza los cuatro campos editables de una opinión: profesor, materia,
-    valoración y observaciones. Antes de esta corrección (27/09/2026), la
-    función solo tocaba materia_id/valoracion/observaciones, y el formulario
-    de edición de "📋 Mis opiniones" ni siquiera exponía el campo materia
-    (solo se podía cambiar desde la tab "🔄 Cambio de Opiniones"). Se agregó
-    `profesor` como parámetro para que el editar desde "Mis opiniones" tenga
-    los mismos cuatro campos que "➕ Agregar opinión".
+    Devuelve (ok: bool, mensaje: str). Actualiza profesor/valoración/
+    observaciones y reemplaza por completo las materias asociadas (borra
+    las viejas y carga las nuevas) — mismo criterio que
+    actualizar_recomendacion_tercero(), con rollback garantizado si algo
+    falla a mitad de camino.
     """
     with get_conn() as conn:
         with conn.cursor() as cur:
-            cur.execute("""
-                UPDATE opiniones_profesores
-                SET profesor = %s, materia_id = %s, valoracion = %s, observaciones = %s
-                WHERE id = %s;
-            """, (profesor, materia_id, valoracion, observaciones, opinion_id))
-        conn.commit()
+            try:
+                cur.execute("""
+                    UPDATE opiniones_profesores
+                    SET profesor = %s, valoracion = %s, observaciones = %s
+                    WHERE id = %s;
+                """, (profesor, valoracion, observaciones, opinion_id))
+                cur.execute("DELETE FROM opiniones_profesores_materias WHERE opinion_id = %s;", (opinion_id,))
+                for materia_id in materia_ids:
+                    cur.execute("""
+                        INSERT INTO opiniones_profesores_materias (opinion_id, materia_id)
+                        VALUES (%s, %s)
+                        ON CONFLICT (opinion_id, materia_id) DO NOTHING;
+                    """, (opinion_id, materia_id))
+                conn.commit()
+            except Exception as e:
+                conn.rollback()
+                return False, f"No se pudo actualizar la opinión: {e}"
     get_profesores_data_completo.clear()
+    return True, "Opinión actualizada."
 
 def eliminar_opinion(opinion_id):
+    # Las filas de opiniones_profesores_materias se borran solas por el
+    # ON DELETE CASCADE de la tabla puente (ver db.py).
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute("DELETE FROM opiniones_profesores WHERE id = %s;", (opinion_id,))
@@ -224,8 +258,10 @@ def eliminar_recomendacion_tercero(recomendacion_id):
 # latencia y se actualiza solo cuando esas funciones limpian el caché.
 #
 # Criterio 👍/👎: el mismo que ya usan las otras tabs — un profesor es 👍 si
-# tiene al menos tantas opiniones "Recomendado" como "No recomendado"
-# (un empate cuenta como 👍).
+# tiene al menos tantas OPINIONES "Recomendado" como "No recomendado" (un
+# empate cuenta como 👍). Nota (27/09/2026): esto cuenta opiniones, no
+# materias — una opinión que cubre 3 materias sigue sumando 1 sola vez,
+# igual que antes de que existiera la posibilidad de agrupar materias.
 #
 # Unión de nombres: en tus opiniones el profesor es un solo texto libre y en
 # las de terceros van apellido y nombre por separado. Para reconocer al
@@ -280,6 +316,13 @@ def agrupar_por_reputacion(opiniones, recomendaciones):
     negativos.sort(key=_sin_tildes_minusculas)
     return positivos, negativos
 
+def _texto_materias(materia_nombres, materia_anios):
+    """Arma 'Año — Materia, Año — Materia, ...' a partir de las listas de la opinión."""
+    return ", ".join(
+        f"{NOMBRES_ANIO.get(anio, f'Año {anio}')} — {nombre}"
+        for nombre, anio in zip(materia_nombres, materia_anios)
+    )
+
 def mostrar(usuario):
     if not usuario:
         st.switch_page("app.py")
@@ -296,6 +339,10 @@ def mostrar(usuario):
         usuario["id"], usuario["carrera_id"]
     )
     opciones = {f"{NOMBRES_ANIO.get(m[2], '')} — {m[1]}": m[0] for m in todas}
+    # Lista con placeholder "—" para los selectores de "hasta 3 materias"
+    # (27/09/2026): ninguno de los 3 campos es obligatorio individualmente,
+    # solo hace falta completar al menos uno.
+    opciones_multi_lista = ["—"] + list(opciones.keys())
 
     tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
         "📋 Mis opiniones",
@@ -326,43 +373,50 @@ def mostrar(usuario):
             else:
                 por_profesor = {}
                 for op in opiniones:
-                    oid, profesor, valoracion, observaciones, materia_id, materia_nombre, materia_anio = op
-                    if profesor not in por_profesor:
-                        por_profesor[profesor] = []
-                    por_profesor[profesor].append(op)
-
+                    profesor = op[1]
+                    por_profesor.setdefault(profesor, []).append(op)
 
                 for profesor, ops in por_profesor.items():
                     recomendados = sum(1 for o in ops if o[2] == "Recomendado")
                     icono_prof = "👍" if recomendados >= len(ops) / 2 else "👎"
+                    total_materias = sum(len(o[4]) for o in ops)
 
-                    with st.expander(f"{icono_prof} {profesor} ({len(ops)} materia{'s' if len(ops) > 1 else ''})"):
+                    with st.expander(f"{icono_prof} {profesor} ({total_materias} materia{'s' if total_materias != 1 else ''})"):
                         for op in ops:
-                            oid, _, valoracion, observaciones, materia_id, materia_nombre, materia_anio = op
+                            oid, _, valoracion, observaciones, materia_ids, materia_nombres, materia_anios = op
                             key_edit_op = f"editando_opinion_{oid}"
-                            anio_texto = NOMBRES_ANIO.get(materia_anio, f"Año {materia_anio}")
+                            materias_texto = _texto_materias(materia_nombres, materia_anios)
 
                             if st.session_state.get(key_edit_op):
-                                # ── Formulario de edición inline (27/09/2026: se
-                                # agregaron los campos "Profesor" y "Materia" — antes
-                                # solo se podía tocar valoración/observaciones desde
-                                # acá, y para cambiar materia o profesor había que ir
-                                # a la tab "🔄 Cambio de Opiniones". Ahora tiene los
-                                # mismos cuatro campos que "➕ Agregar opinión". ──────
+                                # ── Formulario de edición inline (27/09/2026: ahora
+                                # tiene profesor + hasta 3 materias + valoración +
+                                # observaciones, los mismos cuatro tipos de campo que
+                                # "➕ Agregar opinión". Antes solo se podía tocar
+                                # valoración/observaciones desde acá. ──────────────
                                 with st.form(f"form_edit_opinion_{oid}"):
-                                    st.markdown(f"**✏️ Editando opinión — {anio_texto}: {materia_nombre}**")
+                                    st.markdown(f"**✏️ Editando opinión — {profesor}**")
                                     nuevo_profesor = st.text_input(
                                         "Nombre del profesor/a", value=profesor, key=f"edit_profesor_{oid}"
                                     )
-                                    materia_label_actual = f"{anio_texto} — {materia_nombre}"
-                                    idx_materia_actual = (
-                                        list(opciones.keys()).index(materia_label_actual)
-                                        if materia_label_actual in opciones else 0
-                                    )
-                                    nueva_materia_label = st.selectbox(
-                                        "Materia que dicta", list(opciones.keys()),
-                                        index=idx_materia_actual, key=f"edit_materia_{oid}"
-                                    )
+                                    st.markdown("**Materias que dicta** _(hasta 3, completá al menos una)_")
+                                    e_materias_labels = []
+                                    for i in range(3):
+                                        default_label = "—"
+                                        if i < len(materia_ids):
+                                            for lbl, mid_opt in opciones.items():
+                                                if mid_opt == materia_ids[i]:
+                                                    default_label = lbl
+                                                    break
+                                        idx_default = (
+                                            opciones_multi_lista.index(default_label)
+                                            if default_label in opciones_multi_lista else 0
+                                        )
+                                        e_materias_labels.append(
+                                            st.selectbox(
+                                                f"Materia {i + 1}", opciones_multi_lista,
+                                                index=idx_default, key=f"edit_materia_{i}_{oid}"
+                                            )
+                                        )
                                     nueva_valoracion = st.radio(
                                         "Valoración", VALORACIONES,
                                         index=VALORACIONES.index(valoracion) if valoracion in VALORACIONES else 0,
@@ -382,23 +436,35 @@ def mostrar(usuario):
                                         cancelar_op_edit = st.form_submit_button("❌ Cancelar", use_container_width=True)
 
                                 if guardar_op_edit:
+                                    nuevas_materia_ids = []
+                                    for lbl in e_materias_labels:
+                                        if lbl != "—" and opciones[lbl] not in nuevas_materia_ids:
+                                            nuevas_materia_ids.append(opciones[lbl])
                                     if not nuevo_profesor.strip():
                                         st.error("Ingresá el nombre del profesor/a.")
+                                    elif not nuevas_materia_ids:
+                                        st.error("Seleccioná al menos una materia.")
                                     else:
-                                        nueva_materia_id = opciones[nueva_materia_label]
-                                        # No dejar que este profesor quede con dos
-                                        # opiniones cargadas para la misma materia.
-                                        otras_materias_ids = {o[4] for o in ops if o[0] != oid}
-                                        if nueva_materia_id in otras_materias_ids:
-                                            st.error("Ya tenés una opinión cargada para ese profesor en esa materia.")
+                                        # No permitir que este profesor quede con dos
+                                        # opiniones distintas cubriendo la misma materia.
+                                        otras_materias_ids = set()
+                                        for o in ops:
+                                            if o[0] != oid:
+                                                otras_materias_ids.update(o[4])
+                                        conflicto = set(nuevas_materia_ids) & otras_materias_ids
+                                        if conflicto:
+                                            st.error("Ya tenés otra opinión cargada para ese profesor en una de esas materias.")
                                         else:
-                                            actualizar_opinion(
-                                                oid, nueva_materia_id, nuevo_profesor.strip(),
-                                                nueva_valoracion, nuevas_obs.strip()
+                                            ok, msg = actualizar_opinion(
+                                                oid, nuevo_profesor.strip(), nueva_valoracion,
+                                                nuevas_obs.strip(), nuevas_materia_ids
                                             )
-                                            st.session_state[key_edit_op] = False
-                                            st.success("Opinión actualizada.")
-                                            st.rerun()
+                                            if ok:
+                                                st.session_state[key_edit_op] = False
+                                                st.success(msg)
+                                                st.rerun()
+                                            else:
+                                                st.error(f"⚠️ {msg}")
                                 if cancelar_op_edit:
                                     st.session_state[key_edit_op] = False
                                     st.rerun()
@@ -408,7 +474,7 @@ def mostrar(usuario):
 
                                 col1, col2, col3 = st.columns([5, 1, 1])
                                 with col1:
-                                    st.markdown(f"{icono_val} **{valoracion}** — {anio_texto}: {materia_nombre}")
+                                    st.markdown(f"{icono_val} **{valoracion}** — {materias_texto}")
                                     if observaciones:
                                         st.caption(f"💬 {observaciones}")
                                 with col2:
@@ -423,8 +489,6 @@ def mostrar(usuario):
                         st.markdown("---")
 
     with tab2:
-        opciones_lista = ["Elegí una materia"] + list(opciones.keys())
-
         if "form_opinion_key" not in st.session_state:
             st.session_state.form_opinion_key = 0
         fk = st.session_state.form_opinion_key
@@ -436,9 +500,12 @@ def mostrar(usuario):
         # widgets de adentro conservan lo tipeado porque no tenían key propia.
         with st.form(f"form_opinion_{fk}"):
             profesor = st.text_input("Nombre del profesor/a", key=f"opinion_profesor_{fk}")
-            materia_label = st.selectbox(
-                "Materia que dicta", opciones_lista, index=0, key=f"opinion_materia_{fk}"
-            )
+            st.markdown("**Materias que dicta** _(hasta 3, completá al menos una)_")
+            materias_labels = []
+            for i in range(3):
+                materias_labels.append(
+                    st.selectbox(f"Materia {i + 1}", opciones_multi_lista, index=0, key=f"opinion_materia_{i}_{fk}")
+                )
             valoracion = st.radio(
                 "Valoración", VALORACIONES, horizontal=True, key=f"opinion_valoracion_{fk}"
             )
@@ -448,16 +515,37 @@ def mostrar(usuario):
             submit = st.form_submit_button("💾 Guardar opinión", use_container_width=True)
 
         if submit:
+            materia_ids_sel = []
+            for lbl in materias_labels:
+                if lbl != "—" and opciones[lbl] not in materia_ids_sel:
+                    materia_ids_sel.append(opciones[lbl])
             if not profesor:
                 st.error("Ingresá el nombre del profesor/a.")
-            elif materia_label == "Elegí una materia":
-                st.error("Seleccioná una materia.")
+            elif not materia_ids_sel:
+                st.error("Seleccioná al menos una materia.")
             else:
-                materia_id = opciones[materia_label]
-                agregar_opinion(usuario["id"], materia_id, profesor.strip(), valoracion, observaciones.strip())
-                st.session_state.form_opinion_key += 1
-                st.success("✅ Opinión guardada.")
-                st.rerun()
+                # No permitir cargar una opinión nueva que pise una materia
+                # que ese mismo profesor ya tiene cubierta en otra opinión.
+                materias_ya_usadas = set()
+                for op in opiniones_todas:
+                    if op[1] == profesor.strip():
+                        materias_ya_usadas.update(op[4])
+                conflicto = set(materia_ids_sel) & materias_ya_usadas
+                if conflicto:
+                    st.error(
+                        "Ya tenés una opinión cargada para ese profesor en una de esas "
+                        "materias. Corregila desde '📋 Mis opiniones'."
+                    )
+                else:
+                    ok, msg = agregar_opinion(
+                        usuario["id"], profesor.strip(), valoracion, observaciones.strip(), materia_ids_sel
+                    )
+                    if ok:
+                        st.session_state.form_opinion_key += 1
+                        st.success(f"✅ {msg}")
+                        st.rerun()
+                    else:
+                        st.error(f"⚠️ {msg}")
 
     with tab3:
         st.caption(
@@ -658,26 +746,21 @@ def mostrar(usuario):
             for nombre_prof in negativos:
                 st.markdown(f"👎 {nombre_prof}")
 
-    # ── Tab "Cambio de Opiniones" (26/09/2026) ──────────────────────────────
-    # Pantalla dedicada para corregir una opinión de punta a punta: elegís el
-    # profesor, ves todas las materias que le cargaste, y para cada una podés
-    # cambiar la materia (no solo valoración/observaciones, que era lo único
-    # editable desde "Mis opiniones") o borrarla. Abajo hay un formulario para
-    # agregarle una materia nueva al mismo profesor, sin tener que ir a la tab
-    # "➕ Agregar opinión" y volver a tipear el nombre.
-    #
-    # NOTA (27/09/2026): desde que "Mis opiniones" también permite cambiar
-    # materia y profesor directamente, esta tab quedó como una vista
-    # alternativa (todas las materias de un profesor juntas). No se toca:
-    # sigue siendo útil para revisar/corregir de punta a punta a un
-    # profesor con varias materias cargadas.
+    # ── Tab "Cambio de Opiniones" (26/09/2026, actualizada 27/09/2026) ─────
+    # Pantalla dedicada para corregir a un profesor de punta a punta: elegís
+    # el profesor, ves todas las opiniones (bloques de hasta 3 materias) que
+    # le cargaste, y para cada una podés cambiar profesor/materias/
+    # valoración/observaciones o borrarla. Abajo hay un formulario para
+    # cargarle una opinión NUEVA al mismo profesor, con las materias que
+    # todavía no tiene cubiertas.
     #
     # No abre ninguna consulta nueva: trabaja sobre opiniones_todas, que ya
     # trajo el batch de arriba.
     with tab6:
         st.caption(
-            "Elegí un profesor para agregarle una materia nueva, o para cambiarle la "
-            "materia, la valoración o las observaciones a una opinión ya cargada."
+            "Elegí un profesor para cargarle una opinión nueva (hasta 3 materias), o para "
+            "cambiarle el profesor, las materias, la valoración o las observaciones a una "
+            "opinión ya cargada."
         )
 
         if not opiniones_todas:
@@ -691,24 +774,39 @@ def mostrar(usuario):
             )
 
             opiniones_prof = [op for op in opiniones_todas if op[1] == profesor_sel]
-            materias_ya_ids = {op[4] for op in opiniones_prof}
-
-            st.markdown(f"**Materias cargadas para {profesor_sel}:**")
+            materias_ya_ids = set()
             for op in opiniones_prof:
-                oid, _, valoracion, observaciones, materia_id, materia_nombre, materia_anio = op
-                anio_texto = NOMBRES_ANIO.get(materia_anio, f"Año {materia_anio}")
-                materia_label_actual = f"{anio_texto} — {materia_nombre}"
+                materias_ya_ids.update(op[4])
 
-                with st.expander(f"{anio_texto}: {materia_nombre} — {valoracion}"):
+            st.markdown(f"**Opiniones cargadas para {profesor_sel}:**")
+            for op in opiniones_prof:
+                oid, _, valoracion, observaciones, materia_ids, materia_nombres, materia_anios = op
+                materias_texto = _texto_materias(materia_nombres, materia_anios)
+
+                with st.expander(f"{materias_texto} — {valoracion}"):
                     with st.form(f"form_cambio_op_{oid}"):
-                        idx_actual = (
-                            list(opciones.keys()).index(materia_label_actual)
-                            if materia_label_actual in opciones else 0
+                        ec_profesor = st.text_input(
+                            "Profesor/a", value=profesor_sel, key=f"cambio_op_profesor_{oid}"
                         )
-                        nueva_materia_label = st.selectbox(
-                            "Materia", list(opciones.keys()), index=idx_actual,
-                            key=f"cambio_op_materia_{oid}"
-                        )
+                        st.markdown("**Materias que dicta** _(hasta 3)_")
+                        ec_materias_labels = []
+                        for i in range(3):
+                            default_label = "—"
+                            if i < len(materia_ids):
+                                for lbl, mid_opt in opciones.items():
+                                    if mid_opt == materia_ids[i]:
+                                        default_label = lbl
+                                        break
+                            idx_default = (
+                                opciones_multi_lista.index(default_label)
+                                if default_label in opciones_multi_lista else 0
+                            )
+                            ec_materias_labels.append(
+                                st.selectbox(
+                                    f"Materia {i + 1}", opciones_multi_lista,
+                                    index=idx_default, key=f"cambio_op_materia_{i}_{oid}"
+                                )
+                            )
                         nueva_valoracion = st.radio(
                             "Valoración", VALORACIONES,
                             index=VALORACIONES.index(valoracion) if valoracion in VALORACIONES else 0,
@@ -725,23 +823,39 @@ def mostrar(usuario):
                             borrar_cambio = st.form_submit_button("🗑️ Borrar esta opinión", use_container_width=True)
 
                     if guardar_cambio:
-                        nueva_materia_id = opciones[nueva_materia_label]
-                        # Si eligió una materia que ese mismo profesor ya tiene
-                        # cargada en OTRA opinión, no lo dejamos duplicarla.
-                        otras_materias_ids = {o[4] for o in opiniones_prof if o[0] != oid}
-                        if nueva_materia_id in otras_materias_ids:
-                            st.error("Ese profesor ya tiene una opinión cargada para esa materia.")
+                        nuevas_materia_ids = []
+                        for lbl in ec_materias_labels:
+                            if lbl != "—" and opciones[lbl] not in nuevas_materia_ids:
+                                nuevas_materia_ids.append(opciones[lbl])
+                        if not ec_profesor.strip():
+                            st.error("Ingresá el nombre del profesor/a.")
+                        elif not nuevas_materia_ids:
+                            st.error("Seleccioná al menos una materia.")
                         else:
-                            actualizar_opinion(oid, nueva_materia_id, profesor_sel, nueva_valoracion, nuevas_obs.strip())
-                            st.success("Opinión actualizada.")
-                            st.rerun()
+                            otras_materias_ids = set()
+                            for o in opiniones_prof:
+                                if o[0] != oid:
+                                    otras_materias_ids.update(o[4])
+                            conflicto = set(nuevas_materia_ids) & otras_materias_ids
+                            if conflicto:
+                                st.error("Ese profesor ya tiene otra opinión cargada para una de esas materias.")
+                            else:
+                                ok, msg = actualizar_opinion(
+                                    oid, ec_profesor.strip(), nueva_valoracion,
+                                    nuevas_obs.strip(), nuevas_materia_ids
+                                )
+                                if ok:
+                                    st.success(msg)
+                                    st.rerun()
+                                else:
+                                    st.error(f"⚠️ {msg}")
                     if borrar_cambio:
                         eliminar_opinion(oid)
                         st.success("Opinión borrada.")
                         st.rerun()
 
             st.markdown("---")
-            st.markdown(f"**➕ Agregar materia a {profesor_sel}**")
+            st.markdown(f"**➕ Agregar opinión nueva para {profesor_sel}**")
 
             opciones_disponibles = {
                 lbl: mid for lbl, mid in opciones.items() if mid not in materias_ya_ids
@@ -754,23 +868,40 @@ def mostrar(usuario):
                     st.session_state.form_cambio_nueva_key = 0
                 fkc = st.session_state.form_cambio_nueva_key
 
+                opciones_disp_multi_lista = ["—"] + list(opciones_disponibles.keys())
+
                 with st.form(f"form_cambio_nueva_materia_{fkc}"):
-                    nueva_materia_add = st.selectbox(
-                        "Materia", list(opciones_disponibles.keys()), key=f"cambio_nueva_materia_{fkc}"
-                    )
+                    st.markdown("**Materias que dicta** _(hasta 3, completá al menos una)_")
+                    nuevas_labels = []
+                    for i in range(3):
+                        nuevas_labels.append(
+                            st.selectbox(
+                                f"Materia {i + 1}", opciones_disp_multi_lista,
+                                index=0, key=f"cambio_nueva_materia_{i}_{fkc}"
+                            )
+                        )
                     valoracion_add = st.radio(
                         "Valoración", VALORACIONES, horizontal=True, key=f"cambio_nueva_val_{fkc}"
                     )
                     obs_add = st.text_area(
                         "Observaciones (opcional)", height=100, key=f"cambio_nueva_obs_{fkc}"
                     )
-                    submit_add = st.form_submit_button("💾 Agregar materia", use_container_width=True)
+                    submit_add = st.form_submit_button("💾 Agregar opinión", use_container_width=True)
 
                 if submit_add:
-                    materia_id_add = opciones_disponibles[nueva_materia_add]
-                    agregar_opinion(
-                        usuario["id"], materia_id_add, profesor_sel, valoracion_add, obs_add.strip()
-                    )
-                    st.session_state.form_cambio_nueva_key += 1
-                    st.success("✅ Materia agregada.")
-                    st.rerun()
+                    materia_ids_add = []
+                    for lbl in nuevas_labels:
+                        if lbl != "—" and opciones_disponibles[lbl] not in materia_ids_add:
+                            materia_ids_add.append(opciones_disponibles[lbl])
+                    if not materia_ids_add:
+                        st.error("Seleccioná al menos una materia.")
+                    else:
+                        ok, msg = agregar_opinion(
+                            usuario["id"], profesor_sel, valoracion_add, obs_add.strip(), materia_ids_add
+                        )
+                        if ok:
+                            st.session_state.form_cambio_nueva_key += 1
+                            st.success(f"✅ {msg}")
+                            st.rerun()
+                        else:
+                            st.error(f"⚠️ {msg}")

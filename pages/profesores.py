@@ -1,4 +1,4 @@
-# profesores.py - 27.09.2026
+# profesores.py - 29.09.2026
 
 import re
 import unicodedata
@@ -6,7 +6,41 @@ import streamlit as st
 from db import get_conn
 from utils import NOMBRES_ANIO
 
-VALORACIONES = ["Recomendado", "No recomendado"]
+# ─── Valoraciones (categoría "Neutral" agregada 29/09/2026) ────────────────
+# La columna opiniones_profesores.valoracion (y la de recomendaciones_terceros)
+# es texto libre, así que sumar "Neutral" no necesita migrar nada: las
+# opiniones ya cargadas quedan exactamente como estaban.
+VALORACIONES = ["Recomendado", "Neutral", "No recomendado"]
+
+# Ícono de cada opinión individual (la que se ve dentro de cada profesor).
+ICONOS_VALORACION = {"Recomendado": "✅", "Neutral": "🤷", "No recomendado": "❌"}
+
+# ─── Regla de reputación por profesor (29/09/2026) ──────────────────────────
+# Una sola función para las tres tabs (Mis opiniones, Recomendados por
+# terceros y Positivos/Negativos/Neutral), para que los íconos nunca se
+# contradigan entre sí.
+#
+# - Las opiniones "Neutral" no suman ni a favor ni en contra.
+# - Más "Recomendado" que "No recomendado"  → 👍
+# - Más "No recomendado" que "Recomendado"  → 👎
+# - Empate, o solo opiniones neutrales      → 🤷
+#
+# Cambio de comportamiento respecto de antes: un empate entre positivas y
+# negativas contaba como 👍; ahora cuenta como 🤷.
+def _categoria_reputacion(positivas, negativas):
+    if positivas > negativas:
+        return "positivo"
+    if negativas > positivas:
+        return "negativo"
+    return "neutral"
+
+ICONOS_REPUTACION = {"positivo": "👍", "negativo": "👎", "neutral": "🤷"}
+
+def _icono_reputacion(valoraciones):
+    """Recibe la lista de valoraciones (texto) de un profesor y devuelve 👍, 👎 o 🤷."""
+    positivas = sum(1 for v in valoraciones if v == "Recomendado")
+    negativas = sum(1 for v in valoraciones if v == "No recomendado")
+    return ICONOS_REPUTACION[_categoria_reputacion(positivas, negativas)]
 
 # ─── Batch único de la pantalla (ítem prioridad alta, "Seguir optimizando
 # latencia", 14/08/2026) ────────────────────────────────────────────────────
@@ -250,18 +284,18 @@ def eliminar_recomendacion_tercero(recomendacion_id):
         conn.commit()
     get_profesores_data_completo.clear()
 
-# ─── Listados "Positivos" y "Negativos" (24/09/2026) ────────────────────────
-# Agrupa a todos los profesores por 👍 / 👎 sumando tus opiniones propias
+# ─── Listados "Positivos", "Negativos" y "Neutral" (24/09/2026, Neutral
+# agregado 29/09/2026) ───────────────────────────────────────────────────────
+# Agrupa a todos los profesores por 👍 / 👎 / 🤷 sumando tus opiniones propias
 # (opiniones_profesores) y las recomendaciones de terceros, sin importar
 # quién hizo el comentario. NO abre ninguna consulta nueva: trabaja sobre
 # los datos que ya trae get_profesores_data_completo(), así que no suma
 # latencia y se actualiza solo cuando esas funciones limpian el caché.
 #
-# Criterio 👍/👎: el mismo que ya usan las otras tabs — un profesor es 👍 si
-# tiene al menos tantas OPINIONES "Recomendado" como "No recomendado" (un
-# empate cuenta como 👍). Nota (27/09/2026): esto cuenta opiniones, no
-# materias — una opinión que cubre 3 materias sigue sumando 1 sola vez,
-# igual que antes de que existiera la posibilidad de agrupar materias.
+# Criterio: ver _categoria_reputacion() más arriba (las neutrales no suman
+# ni a favor ni en contra; el empate y el "solo neutrales" van a 🤷). Esto
+# cuenta opiniones, no materias — una opinión que cubre 3 materias suma 1
+# sola vez.
 #
 # Unión de nombres: en tus opiniones el profesor es un solo texto libre y en
 # las de terceros van apellido y nombre por separado. Para reconocer al
@@ -279,8 +313,8 @@ def _clave_profesor(texto):
 
 def agrupar_por_reputacion(opiniones, recomendaciones):
     """
-    Devuelve (positivos, negativos): dos listas de nombres para mostrar,
-    ordenadas alfabéticamente.
+    Devuelve (positivos, negativos, neutrales): tres listas de nombres para
+    mostrar, ordenadas alfabéticamente.
     """
     profesores = {}
 
@@ -296,7 +330,7 @@ def agrupar_por_reputacion(opiniones, recomendaciones):
         )
         if valoracion == "Recomendado":
             datos["pos"] += 1
-        else:
+        elif valoracion == "No recomendado":
             datos["neg"] += 1
 
     for op in opiniones:
@@ -307,14 +341,23 @@ def agrupar_por_reputacion(opiniones, recomendaciones):
         datos = profesores.setdefault(clave, {"nombre": profesor.strip(), "pos": 0, "neg": 0})
         if valoracion == "Recomendado":
             datos["pos"] += 1
-        else:
+        elif valoracion == "No recomendado":
             datos["neg"] += 1
 
-    positivos = [d["nombre"] for d in profesores.values() if d["pos"] >= d["neg"]]
-    negativos = [d["nombre"] for d in profesores.values() if d["pos"] < d["neg"]]
+    positivos, negativos, neutrales = [], [], []
+    for d in profesores.values():
+        categoria = _categoria_reputacion(d["pos"], d["neg"])
+        if categoria == "positivo":
+            positivos.append(d["nombre"])
+        elif categoria == "negativo":
+            negativos.append(d["nombre"])
+        else:
+            neutrales.append(d["nombre"])
+
     positivos.sort(key=_sin_tildes_minusculas)
     negativos.sort(key=_sin_tildes_minusculas)
-    return positivos, negativos
+    neutrales.sort(key=_sin_tildes_minusculas)
+    return positivos, negativos, neutrales
 
 def _texto_materias(materia_nombres, materia_anios):
     """Arma 'Año — Materia, Año — Materia, ...' a partir de las listas de la opinión."""
@@ -344,12 +387,13 @@ def mostrar(usuario):
     # solo hace falta completar al menos uno.
     opciones_multi_lista = ["—"] + list(opciones.keys())
 
-    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
         "📋 Mis opiniones",
         "➕ Agregar opinión",
         "🗣️ Profesores recomendados por terceros",
         "👍 Positivos",
         "👎 Negativos",
+        "🤷 Neutral",
         "🔄 Cambio de Opiniones",
     ])
 
@@ -361,7 +405,7 @@ def mostrar(usuario):
         else:
             filtro = st.radio(
                 "Filtrar por valoración",
-                ["Todas", "Recomendado", "No recomendado"],
+                ["Todas"] + VALORACIONES,
                 horizontal=True
             )
 
@@ -377,8 +421,7 @@ def mostrar(usuario):
                     por_profesor.setdefault(profesor, []).append(op)
 
                 for profesor, ops in por_profesor.items():
-                    recomendados = sum(1 for o in ops if o[2] == "Recomendado")
-                    icono_prof = "👍" if recomendados >= len(ops) / 2 else "👎"
+                    icono_prof = _icono_reputacion([o[2] for o in ops])
                     total_materias = sum(len(o[4]) for o in ops)
 
                     with st.expander(f"{icono_prof} {profesor} ({total_materias} materia{'s' if total_materias != 1 else ''})"):
@@ -470,7 +513,7 @@ def mostrar(usuario):
                                     st.rerun()
 
                             else:
-                                icono_val = "✅" if valoracion == "Recomendado" else "❌"
+                                icono_val = ICONOS_VALORACION.get(valoracion, "❔")
 
                                 col1, col2, col3 = st.columns([5, 1, 1])
                                 with col1:
@@ -625,8 +668,7 @@ def mostrar(usuario):
 
             for clave, grupo in por_profesor_t.items():
                 entradas = grupo["entradas"]
-                recomendados_t = sum(1 for e in entradas if e[3] == "Recomendado")
-                icono_prof_t = "👍" if recomendados_t >= len(entradas) / 2 else "👎"
+                icono_prof_t = _icono_reputacion([e[3] for e in entradas])
 
                 materias_combinadas = set()
                 for e in entradas:
@@ -699,7 +741,7 @@ def mostrar(usuario):
                                 st.rerun()
 
                         else:
-                            icono_val_t = "✅" if e_val == "Recomendado" else "❌"
+                            icono_val_t = ICONOS_VALORACION.get(e_val, "❔")
                             materias_texto = ", ".join(e_mat_nombres)
 
                             if es_propia:
@@ -725,10 +767,11 @@ def mostrar(usuario):
 
                         st.markdown("---")
 
-    # ── Tabs "Positivos" y "Negativos" (24/09/2026) ────────────────────────
+    # ── Tabs "Positivos", "Negativos" y "Neutral" (24/09/2026, Neutral
+    # 29/09/2026) ─────────────────────────────────────────────────────────
     # Se calculan en memoria con los datos que ya trajo el batch de arriba,
     # sin ninguna consulta nueva. Ver agrupar_por_reputacion().
-    positivos, negativos = agrupar_por_reputacion(opiniones_todas, recomendaciones)
+    positivos, negativos, neutrales = agrupar_por_reputacion(opiniones_todas, recomendaciones)
 
     with tab4:
         if not positivos:
@@ -746,6 +789,14 @@ def mostrar(usuario):
             for nombre_prof in negativos:
                 st.markdown(f"👎 {nombre_prof}")
 
+    with tab6:
+        if not neutrales:
+            st.info("Todavía no hay profesores con reputación neutral.")
+        else:
+            st.caption(f"{len(neutrales)} profesor(es) con 🤷")
+            for nombre_prof in neutrales:
+                st.markdown(f"🤷 {nombre_prof}")
+
     # ── Tab "Cambio de Opiniones" (26/09/2026, actualizada 27/09/2026) ─────
     # Pantalla dedicada para corregir a un profesor de punta a punta: elegís
     # el profesor, ves todas las opiniones (bloques de hasta 3 materias) que
@@ -756,7 +807,7 @@ def mostrar(usuario):
     #
     # No abre ninguna consulta nueva: trabaja sobre opiniones_todas, que ya
     # trajo el batch de arriba.
-    with tab6:
+    with tab7:
         st.caption(
             "Elegí un profesor para cargarle una opinión nueva (hasta 3 materias), o para "
             "cambiarle el profesor, las materias, la valoración o las observaciones a una "

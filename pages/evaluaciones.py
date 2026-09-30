@@ -1,9 +1,34 @@
+# evaluaciones.py - 30/09/2026
+
 import streamlit as st
 from db import get_conn, get_home_data_completo
 from datetime import date
 from utils import NOMBRES_ANIO
 
 TIPOS = ["Parcial", "Trabajo Práctico", "Recuperatorio", "Reincorporatorio", "Final"]
+
+# ─── Promedios separados (29/09/2026) ──────────────────────────────────────
+# Antes había un "Promedio general" que mezclaba todas las notas de la
+# materia. Ahora son tres promedios independientes, que nunca se juntan:
+# Trabajos Prácticos, Parciales y Recuperatorios. Finales y
+# Reincorporatorios quedan fuera de los tres. No hace falta ningún cambio
+# en la base: se calcula en memoria con las evaluaciones que ya se traen.
+GRUPOS_PROMEDIO = [
+    ("Trabajo Práctico", "TP"),
+    ("Parcial", "Parciales"),
+    ("Recuperatorio", "Recuperatorios"),
+]
+
+def calcular_promedios_por_grupo(evaluaciones):
+    """
+    Devuelve {tipo: promedio o None} para cada tipo de GRUPOS_PROMEDIO.
+    Solo cuenta notas cargadas (nota no nula). None si no hay ninguna.
+    """
+    resultado = {}
+    for tipo, _etiqueta in GRUPOS_PROMEDIO:
+        notas = [float(e[3]) for e in evaluaciones if e[1] == tipo and e[3] is not None]
+        resultado[tipo] = (sum(notas) / len(notas)) if notas else None
+    return resultado
 
 @st.cache_data(ttl=60)
 def get_todas_materias(carrera_id):
@@ -65,6 +90,37 @@ def eliminar_evaluacion(eval_id):
     get_evaluaciones.clear()
     get_home_data_completo.clear()
 
+def mostrar_promedios_grupos(evaluaciones):
+    """
+    Banner con los tres promedios independientes (TP, Parciales,
+    Recuperatorios). Si un grupo todavía no tiene notas, muestra "—".
+    Si ninguno tiene notas, no muestra nada.
+    """
+    promedios = calcular_promedios_por_grupo(evaluaciones)
+    if all(p is None for p in promedios.values()):
+        return
+
+    bloques = ""
+    for tipo, etiqueta in GRUPOS_PROMEDIO:
+        p = promedios[tipo]
+        if p is None:
+            texto, color = "—", "#888888"
+        else:
+            texto, color = f"{p:.2f}", ("#2ecc71" if p >= 6 else "#e74c3c")
+        bloques += (
+            f"<div style='text-align:center; flex:1;'>"
+            f"<div style='color:#ccc; font-size:13px;'>{etiqueta}</div>"
+            f"<div style='color:{color}; font-size:26px; font-weight:bold;'>{texto}</div>"
+            f"</div>"
+        )
+
+    st.markdown(
+        f"<div style='background-color:#1E1E2E; padding:12px 20px; border-radius:10px; "
+        f"display:flex; justify-content:space-between; align-items:center; gap:8px; "
+        f"margin-bottom:15px;'>{bloques}</div>",
+        unsafe_allow_html=True
+    )
+
 def mostrar(usuario):
     if not usuario:
         st.switch_page("app.py")
@@ -87,17 +143,7 @@ def mostrar(usuario):
 
     evaluaciones = get_evaluaciones(usuario["id"], materia_id)
 
-    notas = [e[3] for e in evaluaciones if e[3] is not None]
-    if notas:
-        promedio = sum(notas) / len(notas)
-        color = "#2ecc71" if promedio >= 6 else "#e74c3c"
-        st.markdown(f"""
-            <div style="background-color:#1E1E2E; padding:12px 20px; border-radius:10px;
-                        display:flex; justify-content:space-between; align-items:center; margin-bottom:15px;">
-                <span style="color:white; font-size:16px;">📊 Promedio general</span>
-                <span style="color:{color}; font-size:28px; font-weight:bold;">{promedio:.2f}</span>
-            </div>
-        """, unsafe_allow_html=True)
+    mostrar_promedios_grupos(evaluaciones)
 
     tabs = st.tabs(["📋 Parciales", "📄 Trabajos Prácticos", "🔄 Recuperatorios", "🔁 Reincorporatorios", "🎓 Final"])
     tipos_tab = ["Parcial", "Trabajo Práctico", "Recuperatorio", "Reincorporatorio", "Final"]

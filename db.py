@@ -1,4 +1,4 @@
-# db.py - 27.09.2026
+# db.py - 30/09/2026
 
 import os
 import re
@@ -603,6 +603,15 @@ def get_home_data_completo(usuario_id, carrera_id, anio_actual):
     (total, aprobadas, cursando, regulares, desaprobadas, avance, configs,
      cuatrimestre_para_query, header_cuatrimestre, en_transicion,
      materias_cursando, faltas_map, feriados_set, tareas, clases_hoy)
+
+    Cada fila de materias_cursando (cambio 30/09/2026, promedios separados):
+    (nombre, anio, cuatrimestre, anio_cursada, profesor1, dias, horario,
+     modalidad, materia_id, total_notas, prom_tp, prom_parciales,
+     prom_recuperatorios, aprobadas, desaprobadas, detalle_notas,
+     cursada_id, numero_comision, fecha_desde_comision)
+    Antes había un solo "promedio" que mezclaba todos los tipos de
+    evaluación; ahora son tres promedios independientes (TP, Parciales,
+    Recuperatorios). Finales y Reincorporatorios no entran en ninguno.
     """
     hoy = datetime.now()
     dia_semana = ["Lunes","Martes","Miércoles","Jueves","Viernes","Sábado","Domingo"][hoy.weekday()]
@@ -659,7 +668,9 @@ def get_home_data_completo(usuario_id, carrera_id, anio_actual):
                     SELECT
                         materia_id,
                         COUNT(id)                                                             AS total_notas,
-                        ROUND(AVG(nota)::numeric, 2)                                          AS promedio,
+                        ROUND((AVG(nota) FILTER (WHERE tipo = 'Trabajo Práctico'))::numeric, 2) AS prom_tp,
+                        ROUND((AVG(nota) FILTER (WHERE tipo = 'Parcial'))::numeric, 2)          AS prom_parciales,
+                        ROUND((AVG(nota) FILTER (WHERE tipo = 'Recuperatorio'))::numeric, 2)    AS prom_recuperatorios,
                         COUNT(id) FILTER (WHERE aprobado = TRUE)                              AS aprobadas,
                         COUNT(id) FILTER (WHERE aprobado = FALSE AND nota IS NOT NULL)         AS desaprobadas,
                         STRING_AGG(
@@ -676,7 +687,9 @@ def get_home_data_completo(usuario_id, carrera_id, anio_actual):
                     mc.nombre, mc.anio, mc.cuatrimestre, mc.anio_cursada,
                     mc.profesor1, mc.dias, mc.horario, mc.modalidad, mc.materia_id,
                     COALESCE(ev.total_notas, 0) AS total_notas,
-                    ev.promedio,
+                    ev.prom_tp,
+                    ev.prom_parciales,
+                    ev.prom_recuperatorios,
                     COALESCE(ev.aprobadas, 0)    AS aprobadas,
                     COALESCE(ev.desaprobadas, 0) AS desaprobadas,
                     ev.detalle_notas,

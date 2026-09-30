@@ -1,3 +1,5 @@
+# home.py - 30/09/2026
+
 import streamlit as st
 from db import (
     get_conn, get_feriados, agregar_feriado, borrar_feriado,
@@ -140,7 +142,8 @@ def mostrar_alerta_asistencia(materias_cursando, todas_configs, faltas_map, feri
     for m in materias_cursando:
         (mnombre, manio, mcuatri, manio_cursada, mprofesor,
          mdias, mhorario, mmodalidad, mid, total_notas,
-         promedio, aprobadas_ev, desaprobadas_ev, detalle_notas,
+         prom_tp, prom_parciales, prom_recuperatorios,
+         aprobadas_ev, desaprobadas_ev, detalle_notas,
          cursada_id, numero_comision, fecha_desde_comision) = m
 
         config = todas_configs.get((manio_cursada, mcuatri))
@@ -471,6 +474,23 @@ def mostrar_chip_asistencia(mdias, manio_cursada, mcuatri, mid, todas_configs, f
             unsafe_allow_html=True
         )
 
+# ─── Bloque de promedio (30/09/2026) ───────────────────────────────────────────
+# Cada materia muestra tres promedios independientes (TP, Parciales,
+# Recuperatorios) en vez de uno solo que mezclaba todo. Si el grupo todavía
+# no tiene notas, se muestra "—" en gris.
+
+def _bloque_promedio(etiqueta, valor):
+    if valor is None:
+        texto, color = "—", "#888888"
+    else:
+        texto = f"{float(valor):.2f}"
+        color = "#2ecc71" if float(valor) >= 6 else "#e74c3c"
+    return (
+        f"<div style='text-align:center;'>"
+        f"<div style='font-size:11px; color:#aaa;'>{etiqueta}</div>"
+        f"<div style='font-size:22px; font-weight:bold; color:{color};'>{texto}</div></div>"
+    )
+
 # ─── Vista principal ───────────────────────────────────────────────────────────
 
 def mostrar(usuario):
@@ -533,7 +553,8 @@ def mostrar(usuario):
         for m in materias_cursando:
             (mnombre, manio, mcuatri, manio_cursada, mprofesor,
              mdias, mhorario, mmodalidad, mid, total_notas,
-             promedio, aprobadas_ev, desaprobadas_ev, detalle_notas,
+             prom_tp, prom_parciales, prom_recuperatorios,
+             aprobadas_ev, desaprobadas_ev, detalle_notas,
              cursada_id, numero_comision, fecha_desde_comision) = m
 
             estado = calcular_estado_cursada(mcuatri)
@@ -567,18 +588,14 @@ def mostrar(usuario):
 
                 st.markdown("**Notas cargadas:**")
                 if total_notas and int(total_notas) > 0:
-                    col1, col2, col3 = st.columns(3)
+                    col1, col2, col3, col4, col5 = st.columns(5)
                     with col1:
-                        color_prom = "#2ecc71" if promedio and promedio >= 6 else "#e74c3c"
-                        promedio_text = f"{float(promedio):.2f}" if promedio is not None else "—"
-                        st.markdown(
-                            f"<div style='text-align:center;'>"
-                            f"<div style='font-size:11px; color:#aaa;'>Promedio</div>"
-                            f"<div style='font-size:24px; font-weight:bold; color:{color_prom};'>"
-                            f"{promedio_text}</div></div>",
-                            unsafe_allow_html=True
-                        )
+                        st.markdown(_bloque_promedio("TP", prom_tp), unsafe_allow_html=True)
                     with col2:
+                        st.markdown(_bloque_promedio("Parciales", prom_parciales), unsafe_allow_html=True)
+                    with col3:
+                        st.markdown(_bloque_promedio("Recuperatorios", prom_recuperatorios), unsafe_allow_html=True)
+                    with col4:
                         st.markdown(
                             f"<div style='text-align:center;'>"
                             f"<div style='font-size:11px; color:#aaa;'>✅ Aprobadas</div>"
@@ -586,7 +603,7 @@ def mostrar(usuario):
                             f"{aprobadas_ev}</div></div>",
                             unsafe_allow_html=True
                         )
-                    with col3:
+                    with col5:
                         st.markdown(
                             f"<div style='text-align:center;'>"
                             f"<div style='font-size:11px; color:#aaa;'>❌ Desaprobadas</div>"

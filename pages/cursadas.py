@@ -1,4 +1,4 @@
-# cursadas.py
+# cursadas.py - 02.10.2026
 
 import streamlit as st
 from db import (
@@ -411,17 +411,47 @@ def get_materias_aprobadas(usuario_id, carrera_id):
             """, (usuario_id, carrera_id))
             return cur.fetchall()
 
+# ─── Promedios separados (02/10/2026) ──────────────────────────────────────
+# Antes devolvía un solo promedio por materia que mezclaba todos los tipos de
+# nota. Ahora devuelve tres promedios independientes, calculados en la misma
+# consulta (sin consultas ni columnas nuevas): TP, Parciales y Recuperatorios.
+# Finales y Reincorporatorios quedan afuera, igual que en Inicio y en Notas.
+# Formato: {materia_id: (prom_tp, prom_parciales, prom_recuperatorios)}, con
+# None en el grupo que todavía no tiene notas.
 @st.cache_data(ttl=60)
 def get_promedios_por_materia(usuario_id):
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute("""
-                SELECT materia_id, AVG(nota) as promedio
+                SELECT materia_id,
+                       AVG(nota) FILTER (WHERE tipo = 'Trabajo Práctico') AS prom_tp,
+                       AVG(nota) FILTER (WHERE tipo = 'Parcial')          AS prom_parciales,
+                       AVG(nota) FILTER (WHERE tipo = 'Recuperatorio')    AS prom_recuperatorios
                 FROM evaluaciones
                 WHERE usuario_id = %s AND nota IS NOT NULL
                 GROUP BY materia_id;
             """, (usuario_id,))
-            return {row[0]: row[1] for row in cur.fetchall()}
+            return {row[0]: (row[1], row[2], row[3]) for row in cur.fetchall()}
+
+def _texto_promedios_html(promedios):
+    """
+    Una sola línea con los tres promedios: "TP 7.50 · Parciales 8.00 ·
+    Recuperatorios —". Verde si el valor es 6 o más, rojo si es menor, gris
+    con "—" si el grupo no tiene notas (mismos criterios que en Inicio).
+    Si ninguno de los tres tiene notas, devuelve "Sin notas cargadas".
+    """
+    if not promedios or all(p is None for p in promedios):
+        return "Sin notas cargadas"
+
+    partes = []
+    for etiqueta, valor in zip(("TP", "Parciales", "Recuperatorios"), promedios):
+        if valor is None:
+            texto, color = "—", "#888888"
+        else:
+            texto = f"{float(valor):.2f}"
+            color = "#2ecc71" if float(valor) >= 6 else "#e74c3c"
+        partes.append(f"{etiqueta} <span style='color:{color};'>{texto}</span>")
+    return " · ".join(partes)
 
 def guardar_cursada(usuario_id, materia_id, anio, cuatrimestre, modalidad, turno, dias, horario, link,
                      profesor1, email_profesor1, profesor2, email_profesor2,
@@ -1383,8 +1413,7 @@ def mostrar(usuario):
                     if prof2:
                         profesores = f"{profesores} / {prof2}" if profesores else prof2
 
-                    promedio = promedios_map.get(mid)
-                    promedio_text = f"{float(promedio):.2f}" if promedio is not None else "Sin notas cargadas"
+                    promedios_text = _texto_promedios_html(promedios_map.get(mid))
 
                     profesor_html = f"<div style='color:#a8e6c1; font-size:13px; margin-top:2px;'>👨‍🏫 {profesores}</div>" if profesores else ""
 
@@ -1397,7 +1426,7 @@ def mostrar(usuario):
                         f"</div>"
                         f"{profesor_html}"
                         f"<div style='color:#80ffaa; font-weight:bold; font-size:15px; margin-top:6px;'>"
-                        f"📊 Promedio: {promedio_text}</div>"
+                        f"📊 {promedios_text}</div>"
                         f"</div>",
                         unsafe_allow_html=True
                     )

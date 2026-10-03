@@ -1,4 +1,4 @@
-# db.py - 30/09/2026
+# db.py - 03/10/2026
 
 import os
 import re
@@ -461,6 +461,71 @@ def init_db():
         VALUES ('Licenciatura en Psicología', 'UdeMM')
         ON CONFLICT (nombre, universidad) DO NOTHING;
     """)
+
+    # ── Notas de parcial por número (03/10/2026) ───────────────────────────
+    # Columna `numero` en evaluaciones: 1 o 2, solo para tipo = 'Parcial'. En
+    # el resto de los tipos queda en NULL. Sirve para saber con seguridad cuál
+    # es el 1er y cuál el 2do parcial, y para impedir cargar dos veces el
+    # mismo. Es una columna nueva que admite NULL, así que no toca ninguna
+    # nota existente y el código viejo sigue funcionando si hay que volver
+    # atrás.
+    cur.execute("ALTER TABLE evaluaciones ADD COLUMN IF NOT EXISTS numero INTEGER;")
+
+    # Migración de los parciales ya cargados (corre en cada arranque, pero
+    # solo toca lo que todavía no tiene número). Reglas, para no adivinar:
+    #  - Solo se numera un (alumno, materia) si NINGUNO de sus parciales tiene
+    #    número todavía, tiene como máximo 2 parciales, y todos tienen fecha.
+    #  - El más antiguo es el 1er parcial, el siguiente el 2do.
+    #  - Si una materia tiene más de 2 parciales, o alguno sin fecha, queda sin
+    #    número y se corrige a mano desde Notas (botón Editar).
+    # Va dentro de un savepoint: si algo falla, no se cae el arranque de la app.
+    try:
+        with conn.transaction():
+            cur.execute("""
+                WITH candidatos AS (
+                    SELECT e.id,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY e.usuario_id, e.materia_id
+                               ORDER BY e.fecha ASC, e.id ASC
+                           ) AS rn
+                    FROM evaluaciones e
+                    WHERE e.tipo = 'Parcial'
+                      AND e.numero IS NULL
+                      AND NOT EXISTS (
+                          SELECT 1 FROM evaluaciones x
+                          WHERE x.usuario_id = e.usuario_id
+                            AND x.materia_id = e.materia_id
+                            AND x.tipo = 'Parcial'
+                            AND (x.numero IS NOT NULL OR x.fecha IS NULL)
+                      )
+                      AND (
+                          SELECT COUNT(*) FROM evaluaciones y
+                          WHERE y.usuario_id = e.usuario_id
+                            AND y.materia_id = e.materia_id
+                            AND y.tipo = 'Parcial'
+                      ) <= 2
+                )
+                UPDATE evaluaciones ev
+                SET numero = c.rn
+                FROM candidatos c
+                WHERE ev.id = c.id;
+            """)
+    except Exception as e:
+        print(f"ADVERTENCIA: no se pudo numerar los parciales existentes: {e}")
+
+    # Garantía extra en la base: un solo parcial por número, alumno y materia.
+    # También en savepoint: si por algún motivo ya hubiera duplicados, el
+    # índice no se crea pero la app arranca igual (la validación de
+    # evaluaciones.py sigue funcionando).
+    try:
+        with conn.transaction():
+            cur.execute("""
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_evaluaciones_parcial_unico
+                ON evaluaciones (usuario_id, materia_id, numero)
+                WHERE tipo = 'Parcial' AND numero IS NOT NULL;
+            """)
+    except Exception as e:
+        print(f"ADVERTENCIA: no se pudo crear el índice único de parciales: {e}")
 
     conn.commit()
     cur.close()

@@ -1,11 +1,21 @@
-# evaluaciones.py - 30/09/2026
+# evaluaciones.py - 03/10/2026
 
 import streamlit as st
+import psycopg
 from db import get_conn, get_home_data_completo
 from datetime import date
 from utils import NOMBRES_ANIO
 
 TIPOS = ["Parcial", "Trabajo Práctico", "Recuperatorio", "Reincorporatorio", "Final"]
+
+# ─── Parciales por número (03/10/2026) ─────────────────────────────────────
+# Cada parcial lleva un número (1 o 2) en la columna evaluaciones.numero.
+# Solo puede haber una nota por número, por alumno y materia: para cambiarla
+# se usa Editar o Borrar. Los demás tipos no usan número.
+NOMBRES_PARCIAL = {1: "1er Parcial", 2: "2do Parcial"}
+
+def _nombre_parcial(numero):
+    return NOMBRES_PARCIAL.get(numero, "Parcial sin número")
 
 # ─── Promedios separados (29/09/2026) ──────────────────────────────────────
 # Antes había un "Promedio general" que mezclaba todas las notas de la
@@ -47,40 +57,66 @@ def get_evaluaciones(usuario_id, materia_id):
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute("""
-                SELECT id, tipo, descripcion, nota, fecha, aprobado
+                SELECT id, tipo, descripcion, nota, fecha, aprobado, numero
                 FROM evaluaciones
                 WHERE usuario_id = %s AND materia_id = %s
                 ORDER BY fecha ASC NULLS LAST, tipo;
             """, (usuario_id, materia_id))
             return cur.fetchall()
 
-def agregar_evaluacion(usuario_id, materia_id, tipo, descripcion, nota, fecha, aprobado):
+def agregar_evaluacion(usuario_id, materia_id, tipo, descripcion, nota, fecha, aprobado, numero=None):
+    """
+    Devuelve (ok: bool, mensaje: str). `numero` solo se usa para parciales
+    (1 o 2). Si el índice único de la base rechaza un parcial repetido
+    (por ejemplo, dos pestañas guardando a la vez), devuelve ok=False.
+    """
     # Redondeo defensivo a 2 decimales: la columna ya es NUMERIC(4,2), pero
     # normalizamos acá también para que la nota que se usa en cálculos en
     # memoria (promedios, etc.) coincida siempre con la que quedó guardada.
     nota = round(float(nota), 2) if nota is not None else None
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute("""
-                INSERT INTO evaluaciones (usuario_id, materia_id, tipo, descripcion, nota, fecha, aprobado)
-                VALUES (%s, %s, %s, %s, %s, %s, %s);
-            """, (usuario_id, materia_id, tipo, descripcion, nota, fecha, aprobado))
-        conn.commit()
+    if tipo != "Parcial":
+        numero = None
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO evaluaciones (usuario_id, materia_id, tipo, descripcion, nota, fecha, aprobado, numero)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s);
+                """, (usuario_id, materia_id, tipo, descripcion, nota, fecha, aprobado, numero))
+            conn.commit()
+    except psycopg.errors.UniqueViolation:
+        return False, f"Ya existe una nota del {_nombre_parcial(numero)} para esta materia."
     get_evaluaciones.clear()
     get_home_data_completo.clear()
+    return True, "Guardado."
 
-def actualizar_evaluacion(eval_id, descripcion, nota, fecha, aprobado):
+def actualizar_evaluacion(eval_id, descripcion, nota, fecha, aprobado, numero=None, cambia_numero=False):
+    """
+    Devuelve (ok: bool, mensaje: str). `numero` solo se toca si
+    `cambia_numero` es True (se usa para parciales).
+    """
     nota = round(float(nota), 2) if nota is not None else None
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute("""
-                UPDATE evaluaciones
-                SET descripcion = %s, nota = %s, fecha = %s, aprobado = %s
-                WHERE id = %s;
-            """, (descripcion, nota, fecha, aprobado, eval_id))
-        conn.commit()
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                if cambia_numero:
+                    cur.execute("""
+                        UPDATE evaluaciones
+                        SET descripcion = %s, nota = %s, fecha = %s, aprobado = %s, numero = %s
+                        WHERE id = %s;
+                    """, (descripcion, nota, fecha, aprobado, numero, eval_id))
+                else:
+                    cur.execute("""
+                        UPDATE evaluaciones
+                        SET descripcion = %s, nota = %s, fecha = %s, aprobado = %s
+                        WHERE id = %s;
+                    """, (descripcion, nota, fecha, aprobado, eval_id))
+            conn.commit()
+    except psycopg.errors.UniqueViolation:
+        return False, f"Ya existe una nota del {_nombre_parcial(numero)} para esta materia."
     get_evaluaciones.clear()
     get_home_data_completo.clear()
+    return True, "Evaluación actualizada."
 
 def eliminar_evaluacion(eval_id):
     with get_conn() as conn:
@@ -151,6 +187,11 @@ def mostrar(usuario):
     for tab, tipo in zip(tabs, tipos_tab):
         with tab:
             evals_tipo = [e for e in evaluaciones if e[1] == tipo]
+            if tipo == "Parcial":
+                # 1er y 2do primero; los que no tienen número, al final.
+                evals_tipo.sort(key=lambda e: (e[6] is None, e[6] or 0))
+                numeros_ocupados = {e[6]: e[0] for e in evals_tipo if e[6] is not None}
+                sin_numero = [e for e in evals_tipo if e[6] is None]
 
             if evals_tipo:
                 notas_tipo = [e[3] for e in evals_tipo if e[3] is not None]
@@ -159,13 +200,24 @@ def mostrar(usuario):
                     st.markdown(f"**Promedio {tipo}:** `{prom_tipo:.2f}`")
 
                 for e in evals_tipo:
-                    eid, etipo, edesc, enota, efecha, eaprobado = e
+                    eid, etipo, edesc, enota, efecha, eaprobado, enumero = e
                     key_edit = f"editando_eval_{eid}"
 
                     if st.session_state.get(key_edit):
                         # ── Formulario de edición inline ──────────────────
                         with st.form(f"form_edit_eval_{eid}"):
-                            st.markdown(f"**✏️ Editando: {edesc or tipo}**")
+                            titulo_edit = _nombre_parcial(enumero) if tipo == "Parcial" else (edesc or tipo)
+                            st.markdown(f"**✏️ Editando: {titulo_edit}**")
+                            nuevo_numero = enumero
+                            if tipo == "Parcial":
+                                opciones_num = [1, 2] if enumero is not None else [None, 1, 2]
+                                nuevo_numero = st.selectbox(
+                                    "¿Qué parcial es?",
+                                    opciones_num,
+                                    index=opciones_num.index(enumero),
+                                    format_func=lambda n: NOMBRES_PARCIAL.get(n, "Sin asignar"),
+                                    key=f"numero_{eid}"
+                                )
                             col1, col2 = st.columns(2)
                             with col1:
                                 nueva_desc = st.text_input(
@@ -197,10 +249,23 @@ def mostrar(usuario):
                                 cancelar = st.form_submit_button("❌ Cancelar", use_container_width=True)
 
                         if guardar:
-                            actualizar_evaluacion(eid, nueva_desc, nueva_nota, nueva_fecha, nuevo_aprobado)
-                            st.session_state[key_edit] = False
-                            st.success("Evaluación actualizada.")
-                            st.rerun()
+                            ocupado_por = numeros_ocupados.get(nuevo_numero) if tipo == "Parcial" else None
+                            if tipo == "Parcial" and nuevo_numero is not None and ocupado_por not in (None, eid):
+                                st.warning(
+                                    f"⚠️ Ya existe una nota del {_nombre_parcial(nuevo_numero)} en esta materia. "
+                                    "Editala o borrala desde la lista; no puede haber dos del mismo parcial."
+                                )
+                            else:
+                                ok_ev, msg_ev = actualizar_evaluacion(
+                                    eid, nueva_desc, nueva_nota, nueva_fecha, nuevo_aprobado,
+                                    numero=nuevo_numero, cambia_numero=(tipo == "Parcial")
+                                )
+                                if ok_ev:
+                                    st.session_state[key_edit] = False
+                                    st.success(msg_ev)
+                                    st.rerun()
+                                else:
+                                    st.warning(f"⚠️ {msg_ev}")
                         if cancelar:
                             st.session_state[key_edit] = False
                             st.rerun()
@@ -209,7 +274,10 @@ def mostrar(usuario):
                         # ── Vista normal ──────────────────────────────────
                         col1, col2, col3 = st.columns([4, 1, 1])
                         with col1:
-                            desc_text = edesc if edesc else tipo
+                            if tipo == "Parcial":
+                                desc_text = _nombre_parcial(enumero) + (f" ({edesc})" if edesc else "")
+                            else:
+                                desc_text = edesc if edesc else tipo
                             nota_text = f"**{enota:.2f}**" if enota is not None else "Sin nota"
                             fecha_text = str(efecha) if efecha else "Sin fecha"
                             aprobado_icon = "✅" if eaprobado else "❌"
@@ -240,7 +308,23 @@ def mostrar(usuario):
             else:
                 st.info(f"No hay {tipo.lower()}s cargados.")
 
+            if tipo == "Parcial" and sin_numero:
+                st.caption(
+                    f"ℹ️ Tenés {len(sin_numero)} parcial(es) sin número. Usá ✏️ Editar para indicar "
+                    "si es el 1er o el 2do."
+                )
+
+            if tipo == "Parcial" and len(numeros_ocupados) >= 2:
+                st.warning(
+                    "⚠️ Ya existe una nota del 1er Parcial y otra del 2do Parcial en esta materia. "
+                    "Para cambiarlas, usá ✏️ Editar o 🗑️ Borrar."
+                )
+                continue
+
             with st.expander(f"➕ Agregar {tipo}"):
+                if tipo == "Parcial" and numeros_ocupados:
+                    ya = ", ".join(NOMBRES_PARCIAL[n] for n in sorted(numeros_ocupados))
+                    st.caption(f"Ya cargado: {ya}.")
                 # Contador de reseteo (ítem "formularios deben volver
                 # limpios", 02/08/2026): se incrementa después de guardar
                 # para que el form se recree con keys nuevas y no quede con
@@ -251,6 +335,14 @@ def mostrar(usuario):
                 fk = st.session_state[eval_key]
 
                 with st.form(f"form_{tipo.replace(' ', '_')}_{materia_id}_{fk}"):
+                    numero_nuevo = None
+                    if tipo == "Parcial":
+                        numeros_libres = [n for n in (1, 2) if n not in numeros_ocupados]
+                        numero_nuevo = st.selectbox(
+                            "¿Qué parcial es?", numeros_libres,
+                            format_func=lambda n: NOMBRES_PARCIAL[n],
+                            key=f"eval_numero_{materia_id}_{fk}"
+                        )
                     descripcion = st.text_input(
                         "Descripción (ej: Parcial 1, TP N°2)", key=f"eval_desc_{tipo}_{materia_id}_{fk}"
                     )
@@ -265,7 +357,19 @@ def mostrar(usuario):
                     )
                     submit = st.form_submit_button("💾 Guardar", use_container_width=True)
                 if submit:
-                    agregar_evaluacion(usuario["id"], materia_id, tipo, descripcion, nota, fecha, aprobado)
-                    st.session_state[eval_key] += 1
-                    st.success(f"{tipo} guardado.")
-                    st.rerun()
+                    if tipo == "Parcial" and numero_nuevo in numeros_ocupados:
+                        st.warning(
+                            f"⚠️ Ya existe una nota del {_nombre_parcial(numero_nuevo)} en esta materia. "
+                            "Editala o borrala desde la lista."
+                        )
+                    else:
+                        ok_ev, msg_ev = agregar_evaluacion(
+                            usuario["id"], materia_id, tipo, descripcion, nota, fecha, aprobado,
+                            numero=numero_nuevo
+                        )
+                        if ok_ev:
+                            st.session_state[eval_key] += 1
+                            st.success(f"{tipo} guardado.")
+                            st.rerun()
+                        else:
+                            st.warning(f"⚠️ {msg_ev}")

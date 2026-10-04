@@ -464,7 +464,7 @@ def _texto_notas_parcial_html(promedios):
     partes = []
     for etiqueta, valor in (("1er Parcial", promedios[3]), ("2do Parcial", promedios[4])):
         if valor is None:
-            texto, color = "—", "#888888"
+            texto, color = "Sin nota cargada aún", "#888888"
         else:
             texto = f"{float(valor):.2f}"
             color = "#2ecc71" if float(valor) >= 6 else "#e74c3c"
@@ -483,7 +483,7 @@ def _linea_evaluacion(etiqueta, fecha, nota):
     if nota is not None:
         partes.append(f"Nota {float(nota):.2f}")
     else:
-        partes.append("Sin nota cargada")
+        partes.append("Sin nota cargada aún")
     return f"{etiqueta}: " + " · ".join(partes)
 
 def _texto_promedios_html(promedios):
@@ -866,7 +866,7 @@ def mostrar_asistencia(usuario, mid, dias, anio, cuatri, cursada_id=None, fecha_
         with st.form(f"form_falta_{mid}_{fk}"):
             col_f1, col_f2 = st.columns(2)
             with col_f1:
-                fecha_falta = st.date_input("Fecha de la falta", value=date.today(), key=f"fecha_falta_{mid}_{fk}")
+                fecha_falta = st.date_input("Fecha de la falta", value=date.today(), key=f"fecha_falta_{mid}_{fk}", format="DD/MM/YYYY")
             with col_f2:
                 justificada = st.checkbox("¿Justificada?", key=f"just_falta_{mid}_{fk}")
             agregar = st.form_submit_button("➕ Marcar falta", use_container_width=True)
@@ -897,8 +897,7 @@ def mostrar_asistencia(usuario, mid, dias, anio, cuatri, cursada_id=None, fecha_
                         col_ef1, col_ef2 = st.columns(2)
                         with col_ef1:
                             nueva_fecha_falta = st.date_input(
-                                "Fecha de la falta", value=ffecha, key=f"nueva_fecha_falta_{fid}"
-                            )
+                                "Fecha de la falta", value=ffecha, key=f"nueva_fecha_falta_{fid}", format="DD/MM/YYYY")
                         with col_ef2:
                             nueva_justificada = st.checkbox(
                                 "¿Justificada?", value=fjust, key=f"nueva_just_falta_{fid}"
@@ -954,7 +953,7 @@ def mostrar_gestion_comision(usuario, mid, cid, numero_comision, fecha_desde_com
             st.markdown("**🔄 Registrar cambio de comisión**")
             col_cc1, col_cc2 = st.columns(2)
             with col_cc1:
-                cc_fecha = st.date_input("Fecha del cambio", value=date.today(), key=f"cc_fecha_{mid}_{fk}")
+                cc_fecha = st.date_input("Fecha del cambio", value=date.today(), key=f"cc_fecha_{mid}_{fk}", format="DD/MM/YYYY")
                 cc_numero = st.text_input("Nueva comisión (ej: COM V)", key=f"cc_numero_{mid}_{fk}")
                 cc_turno = st.selectbox("Turno", TURNOS, index=TURNOS.index(turno) if turno in TURNOS else 0, key=f"cc_turno_{mid}_{fk}")
             with col_cc2:
@@ -1229,11 +1228,11 @@ def mostrar(usuario):
                                 st.markdown("**📆 Fechas de evaluación** _(opcional, se pueden dejar vacías)_")
                                 col_ep1, col_ep2, col_ef = st.columns(3)
                                 with col_ep1:
-                                    e_fecha_parcial1 = st.date_input("1er Parcial", value=fecha_parcial1, key=f"e_fp1_{mid}")
+                                    e_fecha_parcial1 = st.date_input("1er Parcial", value=fecha_parcial1, key=f"e_fp1_{mid}", format="DD/MM/YYYY")
                                 with col_ep2:
-                                    e_fecha_parcial2 = st.date_input("2do Parcial", value=fecha_parcial2, key=f"e_fp2_{mid}")
+                                    e_fecha_parcial2 = st.date_input("2do Parcial", value=fecha_parcial2, key=f"e_fp2_{mid}", format="DD/MM/YYYY")
                                 with col_ef:
-                                    e_fecha_final = st.date_input("Final", value=fecha_final, key=f"e_ff_{mid}")
+                                    e_fecha_final = st.date_input("Final", value=fecha_final, key=f"e_ff_{mid}", format="DD/MM/YYYY")
 
                                 col1, col2 = st.columns(2)
                                 with col1:
@@ -1318,11 +1317,11 @@ def mostrar(usuario):
             st.markdown("**📆 Fechas de evaluación** _(opcional, se pueden completar más adelante)_")
             col3, col4, col5 = st.columns(3)
             with col3:
-                fecha_parcial1 = st.date_input("1er Parcial", value=None, key=f"cursada_fp1_{fk}")
+                fecha_parcial1 = st.date_input("1er Parcial", value=None, key=f"cursada_fp1_{fk}", format="DD/MM/YYYY")
             with col4:
-                fecha_parcial2 = st.date_input("2do Parcial", value=None, key=f"cursada_fp2_{fk}")
+                fecha_parcial2 = st.date_input("2do Parcial", value=None, key=f"cursada_fp2_{fk}", format="DD/MM/YYYY")
             with col5:
-                fecha_final = st.date_input("Final", value=None, key=f"cursada_ffinal_{fk}")
+                fecha_final = st.date_input("Final", value=None, key=f"cursada_ffinal_{fk}", format="DD/MM/YYYY")
 
             submit = st.form_submit_button("💾 Guardar cursada", use_container_width=True)
 
@@ -1371,7 +1370,7 @@ def mostrar(usuario):
                     vencida = tvenc and tvenc < hoy and not tcomp
                     estado_icon = "✅ Completada" if tcomp else ("🔴 Vencida" if vencida else "⏳ Pendiente")
                     st.markdown(f"**{tdesc or 'Sin descripción'}**")
-                    st.markdown(f"Vence: {str(tvenc) if tvenc else '—'} — {estado_icon}")
+                    st.markdown(f"Vence: {tvenc.strftime('%d/%m/%Y') if tvenc else '—'} — {estado_icon}")
 
                     col1, col2, col3 = st.columns(3)
                     with col1:
@@ -1404,7 +1403,7 @@ def mostrar(usuario):
                     if st.session_state.get(f"editando_tarea_{num}_{materia_tarea_id}"):
                         with st.form(f"form_edit_tarea_{num}_{materia_tarea_id}"):
                             nueva_desc = st.text_input("Descripción", value=tdesc or "")
-                            nueva_fecha = st.date_input("Fecha de vencimiento", value=tvenc or hoy)
+                            nueva_fecha = st.date_input("Fecha de vencimiento", value=tvenc or hoy, format="DD/MM/YYYY")
                             nuevo_comp = st.checkbox("Completada", value=tcomp)
                             col1, col2 = st.columns(2)
                             with col1:
@@ -1431,8 +1430,7 @@ def mostrar(usuario):
                     )
                     fecha = st.date_input(
                         "Fecha de vencimiento", value=hoy,
-                        key=f"tarea_nueva_fecha_{materia_tarea_id}_{fk_tarea}"
-                    )
+                        key=f"tarea_nueva_fecha_{materia_tarea_id}_{fk_tarea}", format="DD/MM/YYYY")
                     if st.form_submit_button("💾 Guardar", use_container_width=True):
                         guardar_tarea(usuario["id"], materia_tarea_id, nuevo_num, desc, fecha)
                         st.session_state[key_nueva] += 1

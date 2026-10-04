@@ -244,8 +244,7 @@ def mostrar(usuario):
                                 nueva_fecha = st.date_input(
                                     "Fecha",
                                     value=efecha if efecha else date.today(),
-                                    key=f"fecha_{eid}"
-                                )
+                                    key=f"fecha_{eid}", format="DD/MM/YYYY")
                                 nuevo_aprobado = st.checkbox(
                                     "¿Aprobado?",
                                     value=bool(eaprobado),
@@ -288,7 +287,7 @@ def mostrar(usuario):
                             else:
                                 desc_text = edesc if edesc else tipo
                             nota_text = f"**{enota:.2f}**" if enota is not None else "Sin nota"
-                            fecha_text = str(efecha) if efecha else "Sin fecha"
+                            fecha_text = efecha.strftime("%d/%m/%Y") if efecha else "Sin fecha"
                             aprobado_icon = "✅" if eaprobado else "❌"
                             st.markdown(f"{aprobado_icon} {desc_text} — Nota: {nota_text} — Fecha: {fecha_text}")
                         with col2:
@@ -359,7 +358,7 @@ def mostrar(usuario):
                         "Nota", min_value=0.0, max_value=10.0, step=0.01, format="%.2f", value=0.0,
                         key=f"eval_nota_{tipo}_{materia_id}_{fk}"
                     )
-                    fecha = st.date_input("Fecha", value=date.today(), key=f"eval_fecha_{tipo}_{materia_id}_{fk}")
+                    fecha = st.date_input("Fecha", value=date.today(), key=f"eval_fecha_{tipo}_{materia_id}_{fk}", format="DD/MM/YYYY")
                     aprobado = st.checkbox(
                         "¿Aprobado? (marcá si la nota es ≥ 6)", value=False,
                         key=f"eval_aprobado_{tipo}_{materia_id}_{fk}"

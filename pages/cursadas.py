@@ -1,4 +1,4 @@
-# cursadas.py - 02.10.2026
+# cursadas.py - 04.10.2026
 
 import streamlit as st
 from db import (
@@ -298,7 +298,8 @@ def get_cursadas_tab_data(usuario_id, carrera_id):
     """
     Devuelve, en una sola conexión:
     (materias_cursando, todas_cursadas, todos_programas, feriados_rows,
-     nombre_alumno, faltas_por_materia, historial_por_cursada)
+     nombre_alumno, faltas_por_materia, historial_por_cursada,
+     notas_parcial_por_materia)
     - materias_cursando: [(id, nombre, anio), ...]
     - todas_cursadas: {materia_id: (id, anio_cursada, cuatrimestre, ...)} — mismo
       formato que devuelve get_todas_cursadas().
@@ -310,6 +311,9 @@ def get_cursadas_tab_data(usuario_id, carrera_id):
     - historial_por_cursada: {cursada_id: [(id, numero_comision, turno, dias,
       horario, link, profesor1, email1, profesor2, email2, fecha_desde,
       fecha_hasta), ...]} — mismo formato de fila que get_historial_comisiones().
+    - notas_parcial_por_materia: {materia_id: {1: nota, 2: nota}} — solo los
+      parciales que ya tienen número y nota (04/10/2026). Los parciales sin
+      número no se muestran acá: se les asigna número desde Notas → Editar.
     """
     with get_conn() as conn:
         with conn.cursor() as cur:
@@ -357,6 +361,15 @@ def get_cursadas_tab_data(usuario_id, carrera_id):
             """, (usuario_id,))
             faltas_rows = cur.fetchall()
 
+            # Notas de parcial por número (04/10/2026), en la misma conexión.
+            cur.execute("""
+                SELECT materia_id, numero, nota
+                FROM evaluaciones
+                WHERE usuario_id = %s AND tipo = 'Parcial'
+                  AND numero IS NOT NULL AND nota IS NOT NULL;
+            """, (usuario_id,))
+            notas_parcial_rows = cur.fetchall()
+
             cursada_ids = [row[1] for row in cursadas_rows]
             historial_rows = []
             if cursada_ids:
@@ -385,8 +398,13 @@ def get_cursadas_tab_data(usuario_id, carrera_id):
         cid = row[0]
         historial_por_cursada.setdefault(cid, []).append(row[1:])
 
+    notas_parcial_por_materia = {}
+    for mat_id, numero, nota in notas_parcial_rows:
+        notas_parcial_por_materia.setdefault(mat_id, {})[numero] = nota
+
     return (materias_cursando, todas_cursadas, todos_programas, feriados_rows,
-            nombre_alumno, faltas_por_materia, historial_por_cursada)
+            nombre_alumno, faltas_por_materia, historial_por_cursada,
+            notas_parcial_por_materia)
 
 # ─── Materias aprobadas / promocionadas ─────────────────────────────────────
 # Se usan en la tab "✅ Materias aprobadas" (ítem de prioridad máxima,
@@ -416,8 +434,9 @@ def get_materias_aprobadas(usuario_id, carrera_id):
 # nota. Ahora devuelve tres promedios independientes, calculados en la misma
 # consulta (sin consultas ni columnas nuevas): TP, Parciales y Recuperatorios.
 # Finales y Reincorporatorios quedan afuera, igual que en Inicio y en Notas.
-# Formato: {materia_id: (prom_tp, prom_parciales, prom_recuperatorios)}, con
-# None en el grupo que todavía no tiene notas.
+# Formato: {materia_id: (prom_tp, prom_parciales, prom_recuperatorios,
+# nota_parcial1, nota_parcial2)}, con None en lo que todavía no tiene notas.
+# Las dos últimas (04/10/2026) salen de la misma consulta, sin conexión nueva.
 @st.cache_data(ttl=60)
 def get_promedios_por_materia(usuario_id):
     with get_conn() as conn:
@@ -426,12 +445,46 @@ def get_promedios_por_materia(usuario_id):
                 SELECT materia_id,
                        AVG(nota) FILTER (WHERE tipo = 'Trabajo Práctico') AS prom_tp,
                        AVG(nota) FILTER (WHERE tipo = 'Parcial')          AS prom_parciales,
-                       AVG(nota) FILTER (WHERE tipo = 'Recuperatorio')    AS prom_recuperatorios
+                       AVG(nota) FILTER (WHERE tipo = 'Recuperatorio')    AS prom_recuperatorios,
+                       MAX(nota) FILTER (WHERE tipo = 'Parcial' AND numero = 1) AS parcial1,
+                       MAX(nota) FILTER (WHERE tipo = 'Parcial' AND numero = 2) AS parcial2
                 FROM evaluaciones
                 WHERE usuario_id = %s AND nota IS NOT NULL
                 GROUP BY materia_id;
             """, (usuario_id,))
-            return {row[0]: (row[1], row[2], row[3]) for row in cur.fetchall()}
+            return {row[0]: (row[1], row[2], row[3], row[4], row[5]) for row in cur.fetchall()}
+
+def _texto_notas_parcial_html(promedios):
+    """
+    "1er Parcial 8.00 · 2do Parcial —" para la tab Materias aprobadas.
+    Devuelve None si no hay ninguna de las dos notas cargadas.
+    """
+    if not promedios or (promedios[3] is None and promedios[4] is None):
+        return None
+    partes = []
+    for etiqueta, valor in (("1er Parcial", promedios[3]), ("2do Parcial", promedios[4])):
+        if valor is None:
+            texto, color = "—", "#888888"
+        else:
+            texto = f"{float(valor):.2f}"
+            color = "#2ecc71" if float(valor) >= 6 else "#e74c3c"
+        partes.append(f"{etiqueta} <span style='color:{color};'>{texto}</span>")
+    return " · ".join(partes)
+
+def _linea_evaluacion(etiqueta, fecha, nota):
+    """
+    Una línea de "Evaluaciones" para la tab Cursando actualmente:
+    "1er Parcial: 15/09/2026 · Nota 8.00". Si falta la fecha se muestra solo
+    la nota; si falta la nota, "Sin nota cargada" (en vez de una raya).
+    """
+    partes = []
+    if fecha:
+        partes.append(fecha.strftime('%d/%m/%Y'))
+    if nota is not None:
+        partes.append(f"Nota {float(nota):.2f}")
+    else:
+        partes.append("Sin nota cargada")
+    return f"{etiqueta}: " + " · ".join(partes)
 
 def _texto_promedios_html(promedios):
     """
@@ -440,11 +493,11 @@ def _texto_promedios_html(promedios):
     con "—" si el grupo no tiene notas (mismos criterios que en Inicio).
     Si ninguno de los tres tiene notas, devuelve "Sin notas cargadas".
     """
-    if not promedios or all(p is None for p in promedios):
+    if not promedios or all(p is None for p in promedios[:3]):
         return "Sin notas cargadas"
 
     partes = []
-    for etiqueta, valor in zip(("TP", "Parciales", "Recuperatorios"), promedios):
+    for etiqueta, valor in zip(("TP", "Parciales", "Recuperatorios"), promedios[:3]):
         if valor is None:
             texto, color = "—", "#888888"
         else:
@@ -991,7 +1044,8 @@ def mostrar(usuario):
         # ya consolidado en una sesión anterior), sin importar cuántas
         # materias curse el alumno.
         (materias_cursando, todas_cursadas, todos_programas, feriados_rows,
-         nombre_alumno_tab1, faltas_por_materia, historial_por_cursada) = get_cursadas_tab_data(
+         nombre_alumno_tab1, faltas_por_materia, historial_por_cursada,
+         notas_parcial_por_materia) = get_cursadas_tab_data(
             usuario["id"], usuario["carrera_id"]
         )
         feriados_set_tab1 = {f[1] for f in feriados_rows}
@@ -1073,13 +1127,16 @@ def mostrar(usuario):
                                     use_container_width=True
                                 )
 
-                        # ── Fechas de parciales y final ───────────────────
-                        st.markdown("**📆 Fechas de evaluación:**")
+                        # ── Evaluaciones: fecha + nota de cada parcial ────
+                        # (04/10/2026) La fecha sale de la cursada; la nota, de la
+                        # tabla evaluaciones (ya viene en el batch de arriba).
+                        notas_parc = notas_parcial_por_materia.get(mid, {})
+                        st.markdown("**📆 Evaluaciones:**")
                         col_fp1, col_fp2, col_ff = st.columns(3)
                         with col_fp1:
-                            st.caption(f"1er Parcial: {fecha_parcial1.strftime('%d/%m/%Y') if fecha_parcial1 else '—'}")
+                            st.caption(_linea_evaluacion("1er Parcial", fecha_parcial1, notas_parc.get(1)))
                         with col_fp2:
-                            st.caption(f"2do Parcial: {fecha_parcial2.strftime('%d/%m/%Y') if fecha_parcial2 else '—'}")
+                            st.caption(_linea_evaluacion("2do Parcial", fecha_parcial2, notas_parc.get(2)))
                         with col_ff:
                             st.caption(f"Final: {fecha_final.strftime('%d/%m/%Y') if fecha_final else '—'}")
 
@@ -1414,6 +1471,11 @@ def mostrar(usuario):
                         profesores = f"{profesores} / {prof2}" if profesores else prof2
 
                     promedios_text = _texto_promedios_html(promedios_map.get(mid))
+                    parciales_text = _texto_notas_parcial_html(promedios_map.get(mid))
+                    parciales_html = (
+                        f"<div style='color:#80ffaa; font-size:13px; margin-top:2px;'>"
+                        f"📝 {parciales_text}</div>"
+                    ) if parciales_text else ""
 
                     profesor_html = f"<div style='color:#a8e6c1; font-size:13px; margin-top:2px;'>👨‍🏫 {profesores}</div>" if profesores else ""
 
@@ -1427,9 +1489,12 @@ def mostrar(usuario):
                         f"{profesor_html}"
                         f"<div style='color:#80ffaa; font-weight:bold; font-size:15px; margin-top:6px;'>"
                         f"📊 {promedios_text}</div>"
+                        f"{parciales_html}"
                         f"</div>",
                         unsafe_allow_html=True
                     )
 
             st.markdown("---")
             st.caption(f"Total: {len(aprobadas)} materia(s) aprobada(s)/promocionada(s) con cursada registrada.")
+
+

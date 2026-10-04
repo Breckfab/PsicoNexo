@@ -1,3 +1,5 @@
+# estadisticas.py - 04.10.2026
+
 import streamlit as st
 import pandas as pd
 import altair as alt
@@ -13,6 +15,24 @@ from reportlab.lib.units import cm
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.enums import TA_CENTER
+
+# ─── Promedios separados (04/10/2026, versión 4) ───────────────────────────
+# Igual que en Inicio, Notas y Materias aprobadas: tres promedios
+# independientes (TP, Parciales y Recuperatorios), sin "promedio general".
+# Finales y Reincorporatorios quedan afuera de los tres.
+# El grupo que arranca seleccionado en los selectores es Parciales.
+OPCIONES_GRUPO = ["Parciales", "TP", "Recuperatorios"]
+TIPO_POR_GRUPO = {
+    "TP": "Trabajo Práctico",
+    "Parciales": "Parcial",
+    "Recuperatorios": "Recuperatorio",
+}
+# Posición de cada promedio dentro de las filas de promedio por materia:
+# (nombre, anio, prom_tp, prom_parciales, prom_recuperatorios, cant_notas)
+IDX_PROMEDIO = {"TP": 2, "Parciales": 3, "Recuperatorios": 4}
+
+def _texto_prom(valor):
+    return f"{float(valor):.2f}" if valor is not None else "—"
 
 # ─── Batch de datos para el historial de asistencia (ítem "Consolidar
 # Estadísticas.py en 1-2 queries batch", 07/08/2026) ────────────────────────
@@ -311,6 +331,23 @@ def mostrar_historial_asistencia(usuario_id):
 # distribución de notas, tasa de aprobación) — mismo criterio que
 # get_estadisticas_asistencia_data: 1 conexión en vez de 5 (ítem "Consolidar
 # Estadísticas.py en 1-2 queries batch", 07/08/2026).
+#
+# Versión 4 (04/10/2026): promedios separados. Todo sale de la misma
+# conexión de siempre, sin consultas ni columnas nuevas en la base.
+# Formato de lo que devuelve:
+# - avance_rows: (anio, estado, cantidad)
+# - evolucion_rows: (anio_cursada, cuatrimestre, prom_tp, prom_parciales,
+#   prom_recuperatorios)
+# - promedio_materias_rows: (nombre, anio, prom_tp, prom_parciales,
+#   prom_recuperatorios, cant_notas)
+# - notas: [(tipo, nota), ...] solo TP, Parciales y Recuperatorios
+# - tasa_rows: (tipo, aprobados, total) — todos los tipos, finales incluidos
+#
+# Evolución: antes la consulta unía las notas con cursadas por materia y
+# alumno, así que si una materia se cursó más de una vez, cada nota se
+# contaba en todas sus cursadas. Ahora cada nota se asigna a UNA sola
+# cursada: la que coincide con el año de la fecha de la nota; si la nota no
+# tiene fecha o ninguna cursada coincide, la más reciente.
 
 @st.cache_data(ttl=60)
 def get_estadisticas_generales(usuario_id, carrera_id):
@@ -327,30 +364,46 @@ def get_estadisticas_generales(usuario_id, carrera_id):
             avance_rows = cur.fetchall()
 
             cur.execute("""
-                SELECT c.anio_cursada, c.cuatrimestre, AVG(e.nota) as promedio
+                SELECT c.anio_cursada, c.cuatrimestre,
+                       AVG(e.nota) FILTER (WHERE e.tipo = 'Trabajo Práctico') AS prom_tp,
+                       AVG(e.nota) FILTER (WHERE e.tipo = 'Parcial')          AS prom_parciales,
+                       AVG(e.nota) FILTER (WHERE e.tipo = 'Recuperatorio')    AS prom_recuperatorios
                 FROM evaluaciones e
-                JOIN cursadas c ON c.materia_id = e.materia_id AND c.usuario_id = e.usuario_id
+                JOIN LATERAL (
+                    SELECT c2.anio_cursada, c2.cuatrimestre
+                    FROM cursadas c2
+                    WHERE c2.materia_id = e.materia_id AND c2.usuario_id = e.usuario_id
+                    ORDER BY (c2.anio_cursada = EXTRACT(YEAR FROM e.fecha)) DESC NULLS LAST,
+                             c2.anio_cursada DESC, c2.id DESC
+                    LIMIT 1
+                ) c ON TRUE
                 WHERE e.usuario_id = %s AND e.nota IS NOT NULL
+                  AND e.tipo IN ('Trabajo Práctico', 'Parcial', 'Recuperatorio')
                 GROUP BY c.anio_cursada, c.cuatrimestre
                 ORDER BY c.anio_cursada;
             """, (usuario_id,))
             evolucion_rows = cur.fetchall()
 
             cur.execute("""
-                SELECT m.nombre, m.anio, AVG(e.nota) as promedio, COUNT(e.id) as cantidad_notas
+                SELECT m.nombre, m.anio,
+                       AVG(e.nota) FILTER (WHERE e.tipo = 'Trabajo Práctico') AS prom_tp,
+                       AVG(e.nota) FILTER (WHERE e.tipo = 'Parcial')          AS prom_parciales,
+                       AVG(e.nota) FILTER (WHERE e.tipo = 'Recuperatorio')    AS prom_recuperatorios,
+                       COUNT(e.id) AS cantidad_notas
                 FROM evaluaciones e
                 JOIN materias m ON e.materia_id = m.id
                 WHERE e.usuario_id = %s AND e.nota IS NOT NULL
-                GROUP BY m.nombre, m.anio
-                ORDER BY promedio DESC;
+                  AND e.tipo IN ('Trabajo Práctico', 'Parcial', 'Recuperatorio')
+                GROUP BY m.id, m.nombre, m.anio;
             """, (usuario_id,))
             promedio_materias_rows = cur.fetchall()
 
             cur.execute("""
-                SELECT nota FROM evaluaciones
-                WHERE usuario_id = %s AND nota IS NOT NULL;
+                SELECT tipo, nota FROM evaluaciones
+                WHERE usuario_id = %s AND nota IS NOT NULL
+                  AND tipo IN ('Trabajo Práctico', 'Parcial', 'Recuperatorio');
             """, (usuario_id,))
-            notas = [r[0] for r in cur.fetchall()]
+            notas = cur.fetchall()
 
             cur.execute("""
                 SELECT tipo,
@@ -406,19 +459,28 @@ def mostrar(usuario):
     st.markdown("---")
 
     # ── Evolución de promedios ─────────────────────────────────────
+    # Una línea por grupo (TP, Parciales, Recuperatorios). Si un grupo no
+    # tiene ninguna nota, esa línea no aparece.
     st.markdown("### 📈 Evolución de promedios")
 
-    if not evol_rows:
+    filas_ordenadas = sorted(evol_rows, key=lambda r: (r[0], ORDEN_CUATRI.get(r[1], 9)))
+
+    etiquetas, vals_tp, vals_parc, vals_rec = [], [], [], []
+    for anio_c, cuatri, p_tp, p_parc, p_rec in filas_ordenadas:
+        if p_tp is None and p_parc is None and p_rec is None:
+            continue
+        etiquetas.append(f"{anio_c} · {CUATRI_TEXTO.get(cuatri, cuatri)}")
+        vals_tp.append(round(float(p_tp), 2) if p_tp is not None else None)
+        vals_parc.append(round(float(p_parc), 2) if p_parc is not None else None)
+        vals_rec.append(round(float(p_rec), 2) if p_rec is not None else None)
+
+    if not etiquetas:
         st.info("Todavía no tenés notas cargadas con cursadas asociadas.")
     else:
-        filas_ordenadas = sorted(evol_rows, key=lambda r: (r[0], ORDEN_CUATRI.get(r[1], 9)))
-
-        etiquetas, valores = [], []
-        for anio_c, cuatri, promedio in filas_ordenadas:
-            etiquetas.append(f"{CUATRI_TEXTO.get(cuatri, cuatri)} {anio_c}")
-            valores.append(round(float(promedio), 2))
-
-        df_evol = pd.DataFrame({"Promedio": valores}, index=etiquetas)
+        df_evol = pd.DataFrame(
+            {"TP": vals_tp, "Parciales": vals_parc, "Recuperatorios": vals_rec},
+            index=etiquetas
+        ).astype(float).dropna(axis=1, how="all")
         st.line_chart(df_evol)
 
     st.markdown("---")
@@ -429,20 +491,47 @@ def mostrar(usuario):
     if not prom_rows:
         st.info("Todavía no tenés notas cargadas.")
     else:
-        col1, col2 = st.columns(2)
-        with col1:
-            st.markdown("**🟢 Mejores promedios**")
-            for nombre, anio, promedio, cant in prom_rows[:5]:
-                st.markdown(f"**{float(promedio):.2f}** — {nombre} _{NOMBRES_ANIO.get(anio, '')}_")
-        with col2:
-            st.markdown("**🔴 Promedios más bajos**")
-            for nombre, anio, promedio, cant in prom_rows[-5:][::-1]:
-                st.markdown(f"**{float(promedio):.2f}** — {nombre} _{NOMBRES_ANIO.get(anio, '')}_")
+        grupo_rank = st.selectbox("Ordenar por", OPCIONES_GRUPO, index=0, key="est_rank_grupo")
+        idx = IDX_PROMEDIO[grupo_rank]
+
+        con_grupo = sorted(
+            [r for r in prom_rows if r[idx] is not None],
+            key=lambda r: float(r[idx]), reverse=True
+        )
+        sin_grupo = sorted(
+            [r for r in prom_rows if r[idx] is None], key=lambda r: r[0]
+        )
+
+        if not con_grupo:
+            st.info(f"Todavía no tenés materias con notas de {grupo_rank}.")
+        else:
+            mejores = con_grupo[:5]
+            # Los más bajos salen del resto, para que una materia no
+            # aparezca en las dos columnas cuando hay pocas.
+            bajos = con_grupo[5:][-5:][::-1]
+
+            col1, col2 = st.columns(2)
+            with col1:
+                st.markdown(f"**🟢 Mejores promedios ({grupo_rank})**")
+                for r in mejores:
+                    st.markdown(f"**{float(r[idx]):.2f}** — {r[0]} _{NOMBRES_ANIO.get(r[1], '')}_")
+            with col2:
+                st.markdown(f"**🔴 Promedios más bajos ({grupo_rank})**")
+                if bajos:
+                    for r in bajos:
+                        st.markdown(f"**{float(r[idx]):.2f}** — {r[0]} _{NOMBRES_ANIO.get(r[1], '')}_")
+                else:
+                    st.caption("Hacen falta más de 5 materias con notas para armar esta lista.")
 
         with st.expander("📋 Ver ranking completo"):
+            st.caption(f"Ordenado por {grupo_rank}. Un guion significa que no hay notas de ese grupo.")
             df_ranking = pd.DataFrame(
-                [(n, NOMBRES_ANIO.get(a, a), round(float(p), 2), c) for n, a, p, c in prom_rows],
-                columns=["Materia", "Año", "Promedio", "Cant. Notas"]
+                [
+                    (r[0], NOMBRES_ANIO.get(r[1], r[1]),
+                     _texto_prom(r[2]), _texto_prom(r[3]), _texto_prom(r[4]), r[5])
+                    for r in (con_grupo + sin_grupo)
+                ],
+                columns=["Materia", "Año", "TP", "Parciales", "Recuperatorios", "Cant. Notas"]
             )
             st.dataframe(df_ranking, use_container_width=True, hide_index=True)
 
@@ -454,20 +543,31 @@ def mostrar(usuario):
     if not notas:
         st.info("Todavía no tenés notas cargadas.")
     else:
-        buckets = {"0-3": 0, "4-5": 0, "6-7": 0, "8-10": 0}
-        for n in notas:
-            n = float(n)
-            if n <= 3:
-                buckets["0-3"] += 1
-            elif n <= 5:
-                buckets["4-5"] += 1
-            elif n <= 7:
-                buckets["6-7"] += 1
-            else:
-                buckets["8-10"] += 1
+        grupo_dist = st.selectbox(
+            "Qué notas mostrar", OPCIONES_GRUPO + ["Todas"], index=0, key="est_dist_grupo"
+        )
+        if grupo_dist == "Todas":
+            notas_grupo = [float(n[1]) for n in notas]
+        else:
+            tipo_sel = TIPO_POR_GRUPO[grupo_dist]
+            notas_grupo = [float(n[1]) for n in notas if n[0] == tipo_sel]
 
-        df_dist = pd.DataFrame({"Cantidad": buckets.values()}, index=buckets.keys())
-        st.bar_chart(df_dist, color="#7B2FBE")
+        if not notas_grupo:
+            st.info(f"Todavía no tenés notas de {grupo_dist}.")
+        else:
+            buckets = {"0-3": 0, "4-5": 0, "6-7": 0, "8-10": 0}
+            for n in notas_grupo:
+                if n <= 3:
+                    buckets["0-3"] += 1
+                elif n <= 5:
+                    buckets["4-5"] += 1
+                elif n <= 7:
+                    buckets["6-7"] += 1
+                else:
+                    buckets["8-10"] += 1
+
+            df_dist = pd.DataFrame({"Cantidad": buckets.values()}, index=buckets.keys())
+            st.bar_chart(df_dist, color="#7B2FBE")
 
     st.markdown("---")
 

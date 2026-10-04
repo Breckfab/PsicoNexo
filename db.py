@@ -1,4 +1,4 @@
-# db.py - 03/10/2026
+# db.py - 04.10.2026
 
 import os
 import re
@@ -673,7 +673,10 @@ def get_home_data_completo(usuario_id, carrera_id, anio_actual):
     (nombre, anio, cuatrimestre, anio_cursada, profesor1, dias, horario,
      modalidad, materia_id, total_notas, prom_tp, prom_parciales,
      prom_recuperatorios, aprobadas, desaprobadas, detalle_notas,
-     cursada_id, numero_comision, fecha_desde_comision)
+     cursada_id, numero_comision, fecha_desde_comision, parcial1, parcial2)
+    parcial1 y parcial2 (04/10/2026) son las notas del 1er y 2do parcial de
+    la materia (None si todavía no hay nota con ese número); salen de la
+    misma consulta, sin conexiones nuevas.
     Antes había un solo "promedio" que mezclaba todos los tipos de
     evaluación; ahora son tres promedios independientes (TP, Parciales,
     Recuperatorios). Finales y Reincorporatorios no entran en ninguno.
@@ -738,8 +741,11 @@ def get_home_data_completo(usuario_id, carrera_id, anio_actual):
                         ROUND((AVG(nota) FILTER (WHERE tipo = 'Recuperatorio'))::numeric, 2)    AS prom_recuperatorios,
                         COUNT(id) FILTER (WHERE aprobado = TRUE)                              AS aprobadas,
                         COUNT(id) FILTER (WHERE aprobado = FALSE AND nota IS NOT NULL)         AS desaprobadas,
+                        MAX(nota) FILTER (WHERE tipo = 'Parcial' AND numero = 1)              AS parcial1,
+                        MAX(nota) FILTER (WHERE tipo = 'Parcial' AND numero = 2)              AS parcial2,
                         STRING_AGG(
                             CASE WHEN nota IS NOT NULL
+                                  AND NOT (tipo = 'Parcial' AND numero IS NOT NULL)
                                 THEN tipo || ': ' || nota::text
                             END,
                             ' · ' ORDER BY fecha ASC NULLS LAST
@@ -758,7 +764,8 @@ def get_home_data_completo(usuario_id, carrera_id, anio_actual):
                     COALESCE(ev.aprobadas, 0)    AS aprobadas,
                     COALESCE(ev.desaprobadas, 0) AS desaprobadas,
                     ev.detalle_notas,
-                    mc.cursada_id, mc.numero_comision, mc.fecha_desde_comision
+                    mc.cursada_id, mc.numero_comision, mc.fecha_desde_comision,
+                    ev.parcial1, ev.parcial2
                 FROM materias_cursando mc
                 LEFT JOIN evals_usuario ev ON ev.materia_id = mc.materia_id
                 ORDER BY mc.anio, mc.nombre;
@@ -1042,3 +1049,5 @@ def restaurar_backup_sql(contenido, modo_espejo=False):
 
     get_uso_almacenamiento.clear()
     return {"ok_total": ok_total, "error_total": error_total, "errores": errores, "borradas": borradas}
+
+

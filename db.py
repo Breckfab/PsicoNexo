@@ -907,7 +907,7 @@ def generar_backup_sql():
     delimitador = f"END_STMT_{uuid.uuid4().hex}"
     lineas = [
         "-- PsicoNexo — Backup de base de datos",
-        f"-- Generado: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+        f"-- Generado: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}",
         "-- Generado en Python con psycopg (no requiere pg_dump).",
         "-- Restaurar desde Administración → 📥 Restaurar backup (upsert por id,",
         "-- no borra nada salvo que actives el modo espejo).",

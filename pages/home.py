@@ -1,4 +1,4 @@
-# home.py - 30/09/2026
+# home.py - 04.10.2026
 
 import streamlit as st
 from db import (
@@ -144,7 +144,8 @@ def mostrar_alerta_asistencia(materias_cursando, todas_configs, faltas_map, feri
          mdias, mhorario, mmodalidad, mid, total_notas,
          prom_tp, prom_parciales, prom_recuperatorios,
          aprobadas_ev, desaprobadas_ev, detalle_notas,
-         cursada_id, numero_comision, fecha_desde_comision) = m
+         cursada_id, numero_comision, fecha_desde_comision,
+         parcial1, parcial2) = m
 
         config = todas_configs.get((manio_cursada, mcuatri))
         if not config:
@@ -491,6 +492,24 @@ def _bloque_promedio(etiqueta, valor):
         f"<div style='font-size:22px; font-weight:bold; color:{color};'>{texto}</div></div>"
     )
 
+# ─── Notas de parcial por número (04/10/2026) ──────────────────────────────────
+# "1er Parcial 8.00 · 2do Parcial —", en vez de un "Parcial: 8" suelto. Verde
+# si la nota es 6 o más, rojo si es menor, gris con "—" si todavía no hay nota.
+# Devuelve None si no hay ninguna de las dos.
+
+def _texto_parciales_html(parcial1, parcial2):
+    if parcial1 is None and parcial2 is None:
+        return None
+    partes = []
+    for etiqueta, valor in (("1er Parcial", parcial1), ("2do Parcial", parcial2)):
+        if valor is None:
+            texto, color = "—", "#888888"
+        else:
+            texto = f"{float(valor):.2f}"
+            color = "#2ecc71" if float(valor) >= 6 else "#e74c3c"
+        partes.append(f"{etiqueta} <span style='color:{color}; font-weight:bold;'>{texto}</span>")
+    return " · ".join(partes)
+
 # ─── Vista principal ───────────────────────────────────────────────────────────
 
 def mostrar(usuario):
@@ -555,7 +574,8 @@ def mostrar(usuario):
              mdias, mhorario, mmodalidad, mid, total_notas,
              prom_tp, prom_parciales, prom_recuperatorios,
              aprobadas_ev, desaprobadas_ev, detalle_notas,
-             cursada_id, numero_comision, fecha_desde_comision) = m
+             cursada_id, numero_comision, fecha_desde_comision,
+         parcial1, parcial2) = m
 
             estado = calcular_estado_cursada(mcuatri)
             badge_color = "#2ecc71" if estado == "En curso" else "#95a5a6"
@@ -611,6 +631,12 @@ def mostrar(usuario):
                             f"{desaprobadas_ev}</div></div>",
                             unsafe_allow_html=True
                         )
+                    parciales_html = _texto_parciales_html(parcial1, parcial2)
+                    if parciales_html:
+                        st.markdown(
+                            f"<div style='font-size:13px; margin-top:6px;'>📝 {parciales_html}</div>",
+                            unsafe_allow_html=True
+                        )
                     if detalle_notas:
                         st.caption(f"📋 {detalle_notas}")
                 else:
@@ -651,3 +677,5 @@ def mostrar(usuario):
                 st.caption(f"{tdesc or 'Sin descripción'} — Vence: {venc_text}")
         else:
             st.info("No tenés tareas pendientes.")
+
+

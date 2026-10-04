@@ -94,7 +94,7 @@ def mostrar_alertas_vencimiento(tareas):
             msgs = []
             for t in vencidas:
                 tnum, tdesc, tvenc, mnom = t
-                msgs.append(f"**Tarea {tnum}** de *{mnom}* — venció el {tvenc.strftime('%d/%m')}")
+                msgs.append(f"**Tarea {tnum}** de *{mnom}* — venció el {tvenc.strftime('%d/%m/%Y')}")
             st.error(
                 "🔴 **Tareas vencidas:**\n\n" + "\n\n".join(f"• {m}" for m in msgs),
                 icon="⚠️"
@@ -111,7 +111,7 @@ def mostrar_alertas_vencimiento(tareas):
                 elif dias_restantes == 1:
                     cuando = "**mañana**"
                 else:
-                    cuando = f"en **{dias_restantes} días** ({tvenc.strftime('%d/%m')})"
+                    cuando = f"en **{dias_restantes} días** ({tvenc.strftime('%d/%m/%Y')})"
                 msgs.append(f"**Tarea {tnum}** de *{mnom}* — vence {cuando}")
             st.warning(
                 "⏰ **Tareas por vencer:**\n\n" + "\n\n".join(f"• {m}" for m in msgs),
@@ -246,11 +246,11 @@ def mostrar_config_fechas(usuario_id, anio_actual, cuatrimestre_actual, todas_co
             with col2:
                 fecha_ini = st.date_input("Fecha de inicio",
                                           value=config_existente[0] if config_existente else def_ini,
-                                          key=f"cfg_ini_{fk}")
+                                          key=f"cfg_ini_{fk}", format="DD/MM/YYYY")
             with col3:
                 fecha_fin = st.date_input("Fecha de fin",
                                           value=config_existente[1] if config_existente else def_fin,
-                                          key=f"cfg_fin_{fk}")
+                                          key=f"cfg_fin_{fk}", format="DD/MM/YYYY")
 
             col_g, col_c = st.columns(2)
             with col_g:
@@ -279,12 +279,10 @@ def mostrar_config_fechas(usuario_id, anio_actual, cuatrimestre_actual, todas_co
                         col_e1, col_e2 = st.columns(2)
                         with col_e1:
                             nueva_fi = st.date_input(
-                                "Fecha de inicio", value=fi, key=f"edit_fi_{anio_c}_{cuatri_c}"
-                            )
+                                "Fecha de inicio", value=fi, key=f"edit_fi_{anio_c}_{cuatri_c}", format="DD/MM/YYYY")
                         with col_e2:
                             nueva_ff = st.date_input(
-                                "Fecha de fin", value=ff, key=f"edit_ff_{anio_c}_{cuatri_c}"
-                            )
+                                "Fecha de fin", value=ff, key=f"edit_ff_{anio_c}_{cuatri_c}", format="DD/MM/YYYY")
                         col_ge, col_ce = st.columns(2)
                         with col_ge:
                             guardar_cfg_edit = st.form_submit_button("💾 Guardar", use_container_width=True)
@@ -334,7 +332,7 @@ def mostrar_config_feriados(usuario_id):
         with st.form(f"form_nuevo_feriado_{fk}"):
             col1, col2 = st.columns([1, 2])
             with col1:
-                fecha_feriado = st.date_input("Fecha", value=date.today(), key=f"nuevo_feriado_fecha_{fk}")
+                fecha_feriado = st.date_input("Fecha", value=date.today(), key=f"nuevo_feriado_fecha_{fk}", format="DD/MM/YYYY")
             with col2:
                 desc_feriado = st.text_input("Descripción (opcional)", key=f"nuevo_feriado_desc_{fk}")
             agregar = st.form_submit_button("➕ Agregar", use_container_width=True)
@@ -356,8 +354,7 @@ def mostrar_config_feriados(usuario_id):
                         col_ef1, col_ef2 = st.columns([1, 2])
                         with col_ef1:
                             nueva_fecha_fer = st.date_input(
-                                "Fecha", value=ffecha, key=f"edit_fecha_feriado_{fid}"
-                            )
+                                "Fecha", value=ffecha, key=f"edit_fecha_feriado_{fid}", format="DD/MM/YYYY")
                         with col_ef2:
                             nueva_desc_fer = st.text_input(
                                 "Descripción (opcional)", value=fdesc or "", key=f"edit_desc_feriado_{fid}"
@@ -413,7 +410,7 @@ def mostrar_barra_cuatrimestre(cuatrimestre, anio_cursada, todas_configs):
         f"""
         <div style="margin-top:8px; margin-bottom:4px;">
             <div style="display:flex; justify-content:space-between; font-size:11px; color:#aaa; margin-bottom:3px;">
-                <span>📅 {fecha_inicio.strftime('%d/%m')} → {fecha_fin.strftime('%d/%m/%Y')}</span>
+                <span>📅 {fecha_inicio.strftime('%d/%m/%Y')} → {fecha_fin.strftime('%d/%m/%Y')}</span>
                 <span style="color:{color_barra}; font-weight:bold;">{porcentaje}% — {estado_texto}</span>
             </div>
             <div style="background:#2a2a3e; border-radius:6px; height:8px; overflow:hidden;">
@@ -503,7 +500,7 @@ def _texto_parciales_html(parcial1, parcial2):
     partes = []
     for etiqueta, valor in (("1er Parcial", parcial1), ("2do Parcial", parcial2)):
         if valor is None:
-            texto, color = "—", "#888888"
+            texto, color = "Sin nota cargada aún", "#888888"
         else:
             texto = f"{float(valor):.2f}"
             color = "#2ecc71" if float(valor) >= 6 else "#e74c3c"
@@ -672,7 +669,7 @@ def mostrar(usuario):
                     icono = "⚠️"
                 else:
                     icono = "⏳"
-                venc_text = str(tvenc) if tvenc else "Sin fecha"
+                venc_text = tvenc.strftime("%d/%m/%Y") if tvenc else "Sin fecha"
                 st.markdown(f"{icono} **Tarea {tnum}** — {mnom}")
                 st.caption(f"{tdesc or 'Sin descripción'} — Vence: {venc_text}")
         else:

@@ -1,8 +1,11 @@
-# evaluaciones.py - 03/10/2026
+# evaluaciones.py - 04.10.2026
 
 import streamlit as st
 import psycopg
 from db import get_conn, get_home_data_completo
+# Cachés de cursadas.py que muestran notas (04/10/2026). cursadas.py no
+# importa evaluaciones.py, así que no hay importación circular.
+from pages.cursadas import get_cursadas_tab_data, get_promedios_por_materia
 from datetime import date
 from utils import NOMBRES_ANIO
 
@@ -88,6 +91,8 @@ def agregar_evaluacion(usuario_id, materia_id, tipo, descripcion, nota, fecha, a
         return False, f"Ya existe una nota del {_nombre_parcial(numero)} para esta materia."
     get_evaluaciones.clear()
     get_home_data_completo.clear()
+    get_cursadas_tab_data.clear()
+    get_promedios_por_materia.clear()
     return True, "Guardado."
 
 def actualizar_evaluacion(eval_id, descripcion, nota, fecha, aprobado, numero=None, cambia_numero=False):
@@ -116,6 +121,8 @@ def actualizar_evaluacion(eval_id, descripcion, nota, fecha, aprobado, numero=No
         return False, f"Ya existe una nota del {_nombre_parcial(numero)} para esta materia."
     get_evaluaciones.clear()
     get_home_data_completo.clear()
+    get_cursadas_tab_data.clear()
+    get_promedios_por_materia.clear()
     return True, "Evaluación actualizada."
 
 def eliminar_evaluacion(eval_id):
@@ -125,6 +132,8 @@ def eliminar_evaluacion(eval_id):
         conn.commit()
     get_evaluaciones.clear()
     get_home_data_completo.clear()
+    get_cursadas_tab_data.clear()
+    get_promedios_por_materia.clear()
 
 def mostrar_promedios_grupos(evaluaciones):
     """
@@ -373,3 +382,5 @@ def mostrar(usuario):
                             st.rerun()
                         else:
                             st.warning(f"⚠️ {msg_ev}")
+
+

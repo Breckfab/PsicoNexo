@@ -1,4 +1,4 @@
-# db.py - 04.10.2026
+# db.py - 05.10.2026
 
 import os
 import re
@@ -680,6 +680,9 @@ def get_home_data_completo(usuario_id, carrera_id, anio_actual):
     Antes había un solo "promedio" que mezclaba todos los tipos de
     evaluación; ahora son tres promedios independientes (TP, Parciales,
     Recuperatorios). Finales y Reincorporatorios no entran en ninguno.
+    Versión 5 (05/10/2026): los conteos aprobadas y desaprobadas de cada
+    materia también cuentan solo TP, Parciales y Recuperatorios, igual que
+    los tres promedios. Finales y Reincorporatorios quedan afuera.
     """
     hoy = datetime.now()
     dia_semana = ["Lunes","Martes","Miércoles","Jueves","Viernes","Sábado","Domingo"][hoy.weekday()]
@@ -739,8 +742,10 @@ def get_home_data_completo(usuario_id, carrera_id, anio_actual):
                         ROUND((AVG(nota) FILTER (WHERE tipo = 'Trabajo Práctico'))::numeric, 2) AS prom_tp,
                         ROUND((AVG(nota) FILTER (WHERE tipo = 'Parcial'))::numeric, 2)          AS prom_parciales,
                         ROUND((AVG(nota) FILTER (WHERE tipo = 'Recuperatorio'))::numeric, 2)    AS prom_recuperatorios,
-                        COUNT(id) FILTER (WHERE aprobado = TRUE)                              AS aprobadas,
-                        COUNT(id) FILTER (WHERE aprobado = FALSE AND nota IS NOT NULL)         AS desaprobadas,
+                        COUNT(id) FILTER (WHERE aprobado = TRUE
+                                            AND tipo IN ('Trabajo Práctico', 'Parcial', 'Recuperatorio'))   AS aprobadas,
+                        COUNT(id) FILTER (WHERE aprobado = FALSE AND nota IS NOT NULL
+                                            AND tipo IN ('Trabajo Práctico', 'Parcial', 'Recuperatorio'))   AS desaprobadas,
                         MAX(nota) FILTER (WHERE tipo = 'Parcial' AND numero = 1)              AS parcial1,
                         MAX(nota) FILTER (WHERE tipo = 'Parcial' AND numero = 2)              AS parcial2,
                         STRING_AGG(
@@ -1049,5 +1054,3 @@ def restaurar_backup_sql(contenido, modo_espejo=False):
 
     get_uso_almacenamiento.clear()
     return {"ok_total": ok_total, "error_total": error_total, "errores": errores, "borradas": borradas}
-
-

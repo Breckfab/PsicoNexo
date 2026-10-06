@@ -1,4 +1,4 @@
-# estadisticas.py - 04.10.2026
+# estadisticas.py - 06.10.2026
 
 import streamlit as st
 import pandas as pd
@@ -327,6 +327,10 @@ def mostrar_historial_asistencia(usuario_id):
         })
         st.dataframe(df_detalle, use_container_width=True, hide_index=True)
 
+# Versión 7 (06/10/2026): el avance de carrera deja afuera las materias que ya
+# no están vigentes en el plan, salvo las que el alumno ya tiene con un estado
+# distinto de pendiente (misma regla que Plan de Estudios e Inicio).
+#
 # ─── Batch de datos generales de la pantalla (avance, evolución, ranking,
 # distribución de notas, tasa de aprobación) — mismo criterio que
 # get_estadisticas_asistencia_data: 1 conexión en vez de 5 (ítem "Consolidar
@@ -358,6 +362,7 @@ def get_estadisticas_generales(usuario_id, carrera_id):
                 FROM materias m
                 LEFT JOIN alumno_materias am ON m.id = am.materia_id AND am.usuario_id = %s
                 WHERE m.carrera_id = %s
+                  AND (m.vigente OR (am.estado IS NOT NULL AND am.estado <> 'pendiente'))
                 GROUP BY m.anio, estado
                 ORDER BY m.anio;
             """, (usuario_id, carrera_id))

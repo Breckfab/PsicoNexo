@@ -1,4 +1,4 @@
-# db.py - 05.10.2026
+# db.py - 06.10.2026
 
 import os
 import re
@@ -128,11 +128,35 @@ def init_db():
         );
     """)
 
+    # ── Gestión de cambios al plan de estudios (versión 6, 06/10/2026) ─────
+    # `vigente` marca si la materia sigue en el plan. Nunca se borra una
+    # materia: si sale del plan pasa a vigente = FALSE. Las filas que ya
+    # existen quedan en TRUE, así que no cambia nada de lo que se ve hoy.
+    # Un alumno ve una materia no vigente solo si ya tiene en ella un estado
+    # distinto de 'pendiente' (ver las consultas de get_materias_data_completo
+    # y get_home_data_completo).
+    cur.execute("ALTER TABLE materias ADD COLUMN IF NOT EXISTS vigente BOOLEAN NOT NULL DEFAULT TRUE;")
+
     cur.execute("""
         CREATE TABLE IF NOT EXISTS correlatividades (
             id SERIAL PRIMARY KEY,
             materia_id INTEGER REFERENCES materias(id),
             requiere_materia_id INTEGER REFERENCES materias(id)
+        );
+    """)
+
+    # Historial de cambios al plan: quién tocó qué y cuándo, con el valor
+    # anterior para poder deshacer a mano. materia_id admite NULL (por si
+    # algún día se borra una materia a mano desde la base: el historial queda).
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS plan_cambios (
+            id SERIAL PRIMARY KEY,
+            fecha TIMESTAMP DEFAULT NOW(),
+            usuario_id INTEGER REFERENCES usuarios(id),
+            materia_id INTEGER REFERENCES materias(id) ON DELETE SET NULL,
+            tipo TEXT NOT NULL,
+            detalle TEXT,
+            valor_anterior TEXT
         );
     """)
 
@@ -700,11 +724,17 @@ def get_home_data_completo(usuario_id, carrera_id, anio_actual):
                     WHERE usuario_id = %s
                 ),
                 total AS (
-                    SELECT COUNT(*) AS total FROM materias WHERE carrera_id = %s
+                    SELECT COUNT(*) AS total
+                    FROM materias m
+                    WHERE m.carrera_id = %s
+                      AND (m.vigente OR EXISTS (
+                            SELECT 1 FROM alumno_materias x
+                            WHERE x.materia_id = m.id AND x.usuario_id = %s
+                              AND x.estado <> 'pendiente'))
                 )
                 SELECT t.total, c.aprobadas, c.cursando, c.regulares, c.desaprobadas
                 FROM total t, conteos c;
-            """, (usuario_id, carrera_id))
+            """, (usuario_id, carrera_id, usuario_id))
             total, aprobadas, cursando, regulares, desaprobadas = cur.fetchone()
             avance = round((aprobadas / total) * 100, 1) if total > 0 else 0
 
@@ -824,15 +854,22 @@ def get_materias_data_completo(usuario_id, carrera_id):
     Devuelve, en una sola conexión, todo lo que necesita pages/materias.py
     para pintar el Plan de Estudios:
     (materias, estados_map, correlativas_map)
+    Versión 6 (06/10/2026): las materias no vigentes solo aparecen para el
+    alumno que ya tiene en ellas un estado distinto de 'pendiente'. El
+    formato de lo que devuelve no cambia.
     """
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute("""
-                SELECT id, nombre, anio, cuatrimestre, final_obligatorio, es_electiva
-                FROM materias
-                WHERE carrera_id = %s
-                ORDER BY anio, cuatrimestre, nombre;
-            """, (carrera_id,))
+                SELECT m.id, m.nombre, m.anio, m.cuatrimestre, m.final_obligatorio, m.es_electiva
+                FROM materias m
+                WHERE m.carrera_id = %s
+                  AND (m.vigente OR EXISTS (
+                        SELECT 1 FROM alumno_materias x
+                        WHERE x.materia_id = m.id AND x.usuario_id = %s
+                          AND x.estado <> 'pendiente'))
+                ORDER BY m.anio, m.cuatrimestre, m.nombre;
+            """, (carrera_id, usuario_id))
             materias = cur.fetchall()
 
             cur.execute("""
@@ -862,6 +899,7 @@ TABLAS_BACKUP = [
     "usuarios",
     "materias",
     "correlatividades",
+    "plan_cambios",
     "alumno_materias",
     "codigos_invitacion",
     "recursos",

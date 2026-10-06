@@ -1,4 +1,4 @@
-# profesores.py - 29.09.2026
+# profesores.py - 06.10.2026
 
 import re
 import unicodedata
@@ -85,11 +85,26 @@ def get_profesores_data_completo(usuario_id, carrera_id):
     with get_conn() as conn:
         with conn.cursor() as cur:
             # ── Todas las materias de la carrera (para los selectores) ───
+            # Versión 7 (06/10/2026): una materia que ya no está vigente en el
+            # plan solo aparece si el alumno ya tiene en ella un estado distinto
+            # de pendiente, o si ya la usó en una opinión propia o en una
+            # recomendación que cargó él (así, al editar, no se pierde esa
+            # materia del selector).
             cur.execute("""
-                SELECT id, nombre, anio FROM materias
-                WHERE carrera_id = %s
-                ORDER BY anio, nombre;
-            """, (carrera_id,))
+                SELECT m.id, m.nombre, m.anio FROM materias m
+                WHERE m.carrera_id = %s
+                  AND (m.vigente
+                       OR EXISTS (SELECT 1 FROM alumno_materias x
+                                  WHERE x.materia_id = m.id AND x.usuario_id = %s
+                                    AND x.estado <> 'pendiente')
+                       OR EXISTS (SELECT 1 FROM opiniones_profesores_materias opm
+                                  JOIN opiniones_profesores op ON op.id = opm.opinion_id
+                                  WHERE opm.materia_id = m.id AND op.usuario_id = %s)
+                       OR EXISTS (SELECT 1 FROM recomendaciones_terceros_materias rtm
+                                  JOIN recomendaciones_terceros rt ON rt.id = rtm.recomendacion_id
+                                  WHERE rtm.materia_id = m.id AND rt.cargado_por = %s))
+                ORDER BY m.anio, m.nombre;
+            """, (carrera_id, usuario_id, usuario_id, usuario_id))
             todas_materias = cur.fetchall()
 
             # ── Opiniones propias del alumno (privadas) ──────────────────

@@ -1,4 +1,4 @@
-# cursadas.py - 04.10.2026
+# cursadas.py - 06.10.2026
 
 import streamlit as st
 from db import (
@@ -220,15 +220,22 @@ def get_materias_cursando(usuario_id, carrera_id):
             """, (usuario_id, carrera_id))
             return cur.fetchall()
 
+# Versión 7 (06/10/2026): las materias que ya no están vigentes en el plan solo
+# aparecen si el alumno ya tiene en ellas un estado distinto de pendiente. Por
+# eso ahora recibe también el usuario.
 @st.cache_data(ttl=120)
-def get_todas_materias(carrera_id):
+def get_todas_materias(carrera_id, usuario_id):
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute("""
-                SELECT id, nombre, anio FROM materias
-                WHERE carrera_id = %s
-                ORDER BY anio, nombre;
-            """, (carrera_id,))
+                SELECT m.id, m.nombre, m.anio FROM materias m
+                WHERE m.carrera_id = %s
+                  AND (m.vigente
+                       OR EXISTS (SELECT 1 FROM alumno_materias x
+                                  WHERE x.materia_id = m.id AND x.usuario_id = %s
+                                    AND x.estado <> 'pendiente'))
+                ORDER BY m.anio, m.nombre;
+            """, (carrera_id, usuario_id))
             return cur.fetchall()
 
 @st.cache_data(ttl=60)
@@ -1270,7 +1277,7 @@ def mostrar(usuario):
                             st.markdown(f"[📋 Ver programa]({programa_link})")
 
     with tab2:
-        todas = get_todas_materias(usuario["carrera_id"])
+        todas = get_todas_materias(usuario["carrera_id"], usuario["id"])
         opciones = {f"{NOMBRES_ANIO.get(m[2], '')} — {m[1]}": m[0] for m in todas}
 
         if "form_cursada_key" not in st.session_state:
@@ -1494,5 +1501,3 @@ def mostrar(usuario):
 
             st.markdown("---")
             st.caption(f"Total: {len(aprobadas)} materia(s) aprobada(s)/promocionada(s) con cursada registrada.")
-
-

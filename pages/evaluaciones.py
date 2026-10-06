@@ -1,4 +1,4 @@
-# evaluaciones.py - 04.10.2026
+# evaluaciones.py - 06.10.2026
 
 import streamlit as st
 import psycopg
@@ -43,16 +43,25 @@ def calcular_promedios_por_grupo(evaluaciones):
         resultado[tipo] = (sum(notas) / len(notas)) if notas else None
     return resultado
 
+# Versión 7 (06/10/2026): las materias que ya no están vigentes en el plan solo
+# aparecen si el alumno ya tiene en ellas un estado distinto de pendiente o ya
+# cargó alguna nota. Por eso ahora recibe también el usuario.
 @st.cache_data(ttl=60)
-def get_todas_materias(carrera_id):
+def get_todas_materias(carrera_id, usuario_id):
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute("""
-                SELECT id, nombre, anio, final_obligatorio
-                FROM materias
-                WHERE carrera_id = %s
-                ORDER BY anio, nombre;
-            """, (carrera_id,))
+                SELECT m.id, m.nombre, m.anio, m.final_obligatorio
+                FROM materias m
+                WHERE m.carrera_id = %s
+                  AND (m.vigente
+                       OR EXISTS (SELECT 1 FROM alumno_materias x
+                                  WHERE x.materia_id = m.id AND x.usuario_id = %s
+                                    AND x.estado <> 'pendiente')
+                       OR EXISTS (SELECT 1 FROM evaluaciones e
+                                  WHERE e.materia_id = m.id AND e.usuario_id = %s))
+                ORDER BY m.anio, m.nombre;
+            """, (carrera_id, usuario_id, usuario_id))
             return cur.fetchall()
 
 @st.cache_data(ttl=60)
@@ -172,7 +181,7 @@ def mostrar(usuario):
         return
     st.title("📝 Notas y Evaluaciones")
 
-    todas = get_todas_materias(usuario["carrera_id"])
+    todas = get_todas_materias(usuario["carrera_id"], usuario["id"])
     opciones = {f"{NOMBRES_ANIO.get(m[2], '')} — {m[1]}": (m[0], m[3]) for m in todas}
 
     opciones_lista = ["Elegí una materia"] + list(opciones.keys())
@@ -381,5 +390,3 @@ def mostrar(usuario):
                             st.rerun()
                         else:
                             st.warning(f"⚠️ {msg_ev}")
-
-

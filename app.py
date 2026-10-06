@@ -1,5 +1,4 @@
-
-# app.py - 20/09/2026
+# app.py - 05.10.2026
 
 import os
 import html
@@ -661,33 +660,32 @@ def mostrar_sidebar(usuario):
         st.markdown("---")
 
         # ── Colores forzados de "Cerrar sesión" y "Backup rápido" (fix
-        # 10/08/2026) ────────────────────────────────────────────────────
+        # 10/08/2026; "Cerrar sesión" pasó de azul a rojo el 05/10/2026) ──
         # Versión anterior: un <div id="..."> invisible + selector CSS de
         # hermano adyacente ("#ancla + div button"). No funcionaba, porque
         # cada st.markdown()/st.button() queda envuelto en su propio
         # contenedor de Streamlit — el <div> del ancla termina anidado un
         # nivel más adentro de lo que el combinador "+" puede alcanzar, así
-        # que la regla nunca llegaba a matchear el botón real (por eso el
-        # botón de Backup no salía anaranjado, y el de Salir nunca se forzó
-        # a azul).
+        # que la regla nunca llegaba a matchear el botón real.
         #
         # Reemplazado por el patrón soportado de forma nativa por Streamlit:
         # todo widget con un "key" recibe automáticamente la clase CSS
         # ".st-key-<key>" en su contenedor, sin depender de la posición en
         # el DOM. Un solo bloque <style> de acá cubre los dos botones del
         # sidebar (Salir y Backup), cada uno con su propio key:
-        #   - "btn_logout_sidebar" → azul (#2563EB, hover #1D4ED8)
+        #   - "btn_logout_sidebar" → rojo (#DC2626, hover #B91C1C). Era azul,
+        #     pero se confundía con el botón de Dropbox (#0061FF).
         #   - "btn_backup_sidebar" → ámbar/anaranjado (#D97706, hover #B45309)
         st.markdown("""
             <style>
             .st-key-btn_logout_sidebar button {
-                background-color: #2563EB !important;
-                border-color: #2563EB !important;
+                background-color: #DC2626 !important;
+                border-color: #DC2626 !important;
                 color: white !important;
             }
             .st-key-btn_logout_sidebar button:hover {
-                background-color: #1D4ED8 !important;
-                border-color: #1D4ED8 !important;
+                background-color: #B91C1C !important;
+                border-color: #B91C1C !important;
                 color: white !important;
             }
             .st-key-btn_backup_sidebar button {
@@ -806,5 +804,3 @@ elif st.session_state.usuario is None:
         mostrar_login()
 else:
     mostrar_app()
-
-

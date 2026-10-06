@@ -1,18 +1,29 @@
+# recursos.py - 06.10.2026
+
 import streamlit as st
 from db import get_conn
 from utils import NOMBRES_ANIO, convertir_link_preview
 
 TIPOS = ["Bibliografía", "Apunte", "NotebookLM", "Programa de la Materia", "Otro"]
 
+# Versión 7 (06/10/2026): las materias que ya no están vigentes en el plan solo
+# aparecen si el alumno ya tiene en ellas un estado distinto de pendiente o ya
+# cargó algún recurso. Por eso ahora recibe también el usuario.
 @st.cache_data(ttl=60)
-def get_materias_alumno(carrera_id):
+def get_materias_alumno(carrera_id, usuario_id):
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute("""
-                SELECT id, nombre, anio FROM materias
-                WHERE carrera_id = %s
-                ORDER BY anio, nombre;
-            """, (carrera_id,))
+                SELECT m.id, m.nombre, m.anio FROM materias m
+                WHERE m.carrera_id = %s
+                  AND (m.vigente
+                       OR EXISTS (SELECT 1 FROM alumno_materias x
+                                  WHERE x.materia_id = m.id AND x.usuario_id = %s
+                                    AND x.estado <> 'pendiente')
+                       OR EXISTS (SELECT 1 FROM recursos r
+                                  WHERE r.materia_id = m.id AND r.usuario_id = %s))
+                ORDER BY m.anio, m.nombre;
+            """, (carrera_id, usuario_id, usuario_id))
             return cur.fetchall()
 
 @st.cache_data(ttl=60)
@@ -61,7 +72,7 @@ def mostrar(usuario):
 
     st.title("📂 Recursos por Materia")
 
-    materias = get_materias_alumno(usuario["carrera_id"])
+    materias = get_materias_alumno(usuario["carrera_id"], usuario["id"])
     if not materias:
         st.warning("No hay materias disponibles.")
         return

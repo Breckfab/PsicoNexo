@@ -1,4 +1,4 @@
-# db.py - 06.10.2026
+# db.py - 20.10.2026
 
 import os
 import re
@@ -226,6 +226,14 @@ def init_db():
     cur.execute("""
         ALTER TABLE cursadas ADD COLUMN IF NOT EXISTS fecha_final DATE;
     """)
+
+    # ── Fechas de recuperatorios (20/10/2026) ──────────────────────────────
+    # Un recuperatorio por cada parcial: uno para el 1er parcial y otro para
+    # el 2do. Opcionales, igual que las otras fechas de evaluación. Son
+    # columnas nuevas que admiten NULL, así que no tocan ninguna cursada
+    # existente y el código viejo sigue funcionando si hay que volver atrás.
+    cur.execute("ALTER TABLE cursadas ADD COLUMN IF NOT EXISTS fecha_recuperatorio1 DATE;")
+    cur.execute("ALTER TABLE cursadas ADD COLUMN IF NOT EXISTS fecha_recuperatorio2 DATE;")
 
     # ── Comisiones (ítem #6 de "Cosas por Hacer", 02/08/2026) ──────────────
     # numero_comision + fecha_desde_comision viven directamente en cursadas y

@@ -1046,7 +1046,8 @@ def mostrar_gestion_comision(usuario, mid, cid, numero_comision, fecha_desde_com
 # - Un parcial puede cargarse como "Ausente" (sin nota, no aprobado).
 # - El recuperatorio de un parcial solo se habilita si ese parcial está
 #   desaprobado o con ausencia. Si el parcial está aprobado no corresponde, y
-#   si todavía no hay nada cargado del parcial, queda bloqueado.
+#   si todavía no hay nada cargado del parcial, la nota queda bloqueada. La
+#   FECHA del recuperatorio se puede cargar siempre, por adelantado.
 # - Se marca aprobado con nota 6 o más.
 # - El final solo lleva fecha acá; sus notas siguen cargándose en Notas.
 #
@@ -1166,8 +1167,10 @@ def mostrar_evaluaciones_materia(usuario, mid, cid, fechas, evals):
         if tipo is not None:
             if evals.get((tipo, numero)) is not None:
                 continue
-            if tipo == "Recuperatorio" and not _recuperatorio_habilitado(evals, numero)[0]:
-                continue
+            if tipo == "Recuperatorio":
+                parcial_ev = evals.get(("Parcial", numero))
+                if parcial_ev is not None and parcial_ev[1] is not None and parcial_ev[2]:
+                    continue
         candidatas.append((fecha, etiqueta))
     if candidatas:
         f_prox, e_prox = min(candidatas)
@@ -1190,10 +1193,6 @@ def mostrar_evaluaciones_materia(usuario, mid, cid, fechas, evals):
         habilitado, motivo = True, None
         if tipo == "Recuperatorio":
             habilitado, motivo = _recuperatorio_habilitado(evals, numero)
-        if not habilitado:
-            st.caption(f"{etiqueta}: {motivo}")
-            continue
-
         k_fecha = f"ev_fecha_open_{cid}_{campo}"
         k_nota = f"ev_nota_open_{mid}_{campo}"
         k_del = f"ev_del_open_{mid}_{campo}"
@@ -1203,13 +1202,17 @@ def mostrar_evaluaciones_materia(usuario, mid, cid, fechas, evals):
             if tipo is None:
                 texto_final = fecha.strftime('%d/%m/%Y') if fecha else "Sin fecha"
                 st.markdown(f"{etiqueta}: {texto_final}")
+            elif not habilitado:
+                texto_fecha_rec = fecha.strftime('%d/%m/%Y') if fecha else "Sin fecha"
+                st.markdown(f"{etiqueta}: {texto_fecha_rec}")
+                st.caption(f"Nota: {motivo}")
             else:
                 st.markdown(f"{etiqueta}: {_texto_estado_evaluacion(fecha, ev)}")
         with col_f:
             if st.button("📅 Fecha", key=f"ev_btn_fecha_{cid}_{campo}", use_container_width=True):
                 st.session_state[k_fecha] = not st.session_state.get(k_fecha, False)
                 st.rerun()
-        if tipo is not None:
+        if tipo is not None and habilitado:
             with col_n:
                 etiqueta_boton = "✏️ Nota" if ev is not None else "📝 Nota"
                 if st.button(etiqueta_boton, key=f"ev_btn_nota_{mid}_{campo}", use_container_width=True):
@@ -1251,7 +1254,7 @@ def mostrar_evaluaciones_materia(usuario, mid, cid, fechas, evals):
                 st.rerun()
 
         # ── Carga o edición de la nota ────────────────────────────────────
-        if tipo is not None and st.session_state.get(k_nota):
+        if tipo is not None and habilitado and st.session_state.get(k_nota):
             nota_previa = float(ev[1]) if (ev is not None and ev[1] is not None) else 0.0
             with st.form(f"form_ev_nota_{mid}_{campo}"):
                 st.markdown(f"**{'Editar' if ev is not None else 'Cargar'} nota: {etiqueta}**")

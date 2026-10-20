@@ -1,6 +1,7 @@
-# cursadas.py - 06.10.2026
+# cursadas.py - 20.10.2026
 
 import streamlit as st
+import psycopg
 from db import (
     get_conn, get_feriados, get_clases_hoy, get_historial_comisiones, get_periodos_comision,
     get_home_data_completo,
@@ -306,7 +307,7 @@ def get_cursadas_tab_data(usuario_id, carrera_id):
     Devuelve, en una sola conexión:
     (materias_cursando, todas_cursadas, todos_programas, feriados_rows,
      nombre_alumno, faltas_por_materia, historial_por_cursada,
-     notas_parcial_por_materia)
+     evals_por_materia)
     - materias_cursando: [(id, nombre, anio), ...]
     - todas_cursadas: {materia_id: (id, anio_cursada, cuatrimestre, ...)} — mismo
       formato que devuelve get_todas_cursadas().
@@ -318,9 +319,14 @@ def get_cursadas_tab_data(usuario_id, carrera_id):
     - historial_por_cursada: {cursada_id: [(id, numero_comision, turno, dias,
       horario, link, profesor1, email1, profesor2, email2, fecha_desde,
       fecha_hasta), ...]} — mismo formato de fila que get_historial_comisiones().
-    - notas_parcial_por_materia: {materia_id: {1: nota, 2: nota}} — solo los
-      parciales que ya tienen número y nota (04/10/2026). Los parciales sin
-      número no se muestran acá: se les asigna número desde Notas → Editar.
+    - evals_por_materia: {materia_id: {("Parcial", 1): (id, nota, aprobado,
+      fecha, descripcion), ("Parcial", 2): ..., ("Recuperatorio", 1): ...,
+      ("Recuperatorio", 2): ..., "rec_sin_numero": [(id, nota, fecha), ...],
+      "parcial_sin_numero": cantidad}} (20/10/2026). Un parcial con nota vacía
+      es una ausencia. Los parciales sin número se numeran desde Notas →
+      Editar; los recuperatorios sin número, desde Materias.
+    - cada fila de todas_cursadas trae al final fecha_recuperatorio1 y
+      fecha_recuperatorio2 (20/10/2026).
     """
     with get_conn() as conn:
         with conn.cursor() as cur:
@@ -338,7 +344,8 @@ def get_cursadas_tab_data(usuario_id, carrera_id):
                 SELECT materia_id, id, anio_cursada, cuatrimestre, modalidad, dias, horario, link,
                        profesor1, email_profesor1, profesor2, email_profesor2, turno,
                        fecha_parcial1, fecha_parcial2, fecha_final,
-                       numero_comision, fecha_desde_comision
+                       numero_comision, fecha_desde_comision,
+                       fecha_recuperatorio1, fecha_recuperatorio2
                 FROM cursadas
                 WHERE usuario_id = %s
                 ORDER BY anio_cursada DESC, id DESC;
@@ -368,14 +375,15 @@ def get_cursadas_tab_data(usuario_id, carrera_id):
             """, (usuario_id,))
             faltas_rows = cur.fetchall()
 
-            # Notas de parcial por número (04/10/2026), en la misma conexión.
+            # Parciales y recuperatorios con su número (04/10/2026, ampliado el
+            # 20/10/2026 para cargar las notas desde Materias), en la misma
+            # conexión. Un parcial sin nota es una ausencia (nota vacía).
             cur.execute("""
-                SELECT materia_id, numero, nota
+                SELECT materia_id, tipo, numero, id, nota, aprobado, fecha, descripcion
                 FROM evaluaciones
-                WHERE usuario_id = %s AND tipo = 'Parcial'
-                  AND numero IS NOT NULL AND nota IS NOT NULL;
+                WHERE usuario_id = %s AND tipo IN ('Parcial', 'Recuperatorio');
             """, (usuario_id,))
-            notas_parcial_rows = cur.fetchall()
+            evals_rows = cur.fetchall()
 
             cursada_ids = [row[1] for row in cursadas_rows]
             historial_rows = []
@@ -405,13 +413,19 @@ def get_cursadas_tab_data(usuario_id, carrera_id):
         cid = row[0]
         historial_por_cursada.setdefault(cid, []).append(row[1:])
 
-    notas_parcial_por_materia = {}
-    for mat_id, numero, nota in notas_parcial_rows:
-        notas_parcial_por_materia.setdefault(mat_id, {})[numero] = nota
+    evals_por_materia = {}
+    for mat_id, tipo, numero, eid, nota, aprobado, efecha, edesc in evals_rows:
+        d = evals_por_materia.setdefault(mat_id, {})
+        if numero in (1, 2):
+            d[(tipo, numero)] = (eid, nota, aprobado, efecha, edesc)
+        elif tipo == "Recuperatorio":
+            d.setdefault("rec_sin_numero", []).append((eid, nota, efecha))
+        else:
+            d["parcial_sin_numero"] = d.get("parcial_sin_numero", 0) + 1
 
     return (materias_cursando, todas_cursadas, todos_programas, feriados_rows,
             nombre_alumno, faltas_por_materia, historial_por_cursada,
-            notas_parcial_por_materia)
+            evals_por_materia)
 
 # ─── Materias aprobadas / promocionadas ─────────────────────────────────────
 # Se usan en la tab "✅ Materias aprobadas" (ítem de prioridad máxima,
@@ -516,7 +530,8 @@ def _texto_promedios_html(promedios):
 def guardar_cursada(usuario_id, materia_id, anio, cuatrimestre, modalidad, turno, dias, horario, link,
                      profesor1, email_profesor1, profesor2, email_profesor2,
                      fecha_parcial1=None, fecha_parcial2=None, fecha_final=None,
-                     numero_comision=None):
+                     numero_comision=None,
+                     fecha_recuperatorio1=None, fecha_recuperatorio2=None):
     """
     Alta / corrección de una cursada. IMPORTANTE: esto es para cargar datos
     o corregir errores de tipeo — NO historiza cambios de comisión. Si el
@@ -529,8 +544,8 @@ def guardar_cursada(usuario_id, materia_id, anio, cuatrimestre, modalidad, turno
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute("""
-                INSERT INTO cursadas (usuario_id, materia_id, anio_cursada, cuatrimestre, modalidad, turno, dias, horario, link, profesor1, email_profesor1, profesor2, email_profesor2, fecha_parcial1, fecha_parcial2, fecha_final, numero_comision, fecha_desde_comision)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, CURRENT_DATE)
+                INSERT INTO cursadas (usuario_id, materia_id, anio_cursada, cuatrimestre, modalidad, turno, dias, horario, link, profesor1, email_profesor1, profesor2, email_profesor2, fecha_parcial1, fecha_parcial2, fecha_final, numero_comision, fecha_desde_comision, fecha_recuperatorio1, fecha_recuperatorio2)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, CURRENT_DATE, %s, %s)
                 ON CONFLICT (usuario_id, materia_id, anio_cursada, cuatrimestre)
                 DO UPDATE SET modalidad = EXCLUDED.modalidad, turno = EXCLUDED.turno,
                               dias = EXCLUDED.dias, horario = EXCLUDED.horario,
@@ -540,11 +555,14 @@ def guardar_cursada(usuario_id, materia_id, anio, cuatrimestre, modalidad, turno
                               email_profesor2 = EXCLUDED.email_profesor2,
                               fecha_parcial1 = EXCLUDED.fecha_parcial1,
                               fecha_parcial2 = EXCLUDED.fecha_parcial2,
-                              fecha_final = EXCLUDED.fecha_final;
+                              fecha_final = EXCLUDED.fecha_final,
+                              fecha_recuperatorio1 = COALESCE(EXCLUDED.fecha_recuperatorio1, cursadas.fecha_recuperatorio1),
+                              fecha_recuperatorio2 = COALESCE(EXCLUDED.fecha_recuperatorio2, cursadas.fecha_recuperatorio2);
             """, (usuario_id, materia_id, anio, cuatrimestre, modalidad, turno, dias, horario, link,
                   profesor1, email_profesor1, profesor2, email_profesor2,
                   fecha_parcial1, fecha_parcial2, fecha_final,
-                  numero_comision or "COM I"))
+                  numero_comision or "COM I",
+                  fecha_recuperatorio1, fecha_recuperatorio2))
         conn.commit()
     get_todas_cursadas.clear()
     get_clases_hoy.clear()
@@ -1016,6 +1034,320 @@ def mostrar_gestion_comision(usuario, mid, cid, numero_comision, fecha_desde_com
                     f"{hturno or '—'} · {hdias or '—'} {hhorario or ''}"
                 )
 
+# ─── Fechas y notas de las evaluaciones desde Materias (20/10/2026) ─────────
+# Cada materia en "Cursando actualmente" muestra una fila por evaluación (1er
+# parcial, recuperatorio del 1ro, 2do parcial, recuperatorio del 2do y final)
+# con su fecha y su nota. La fecha se elige con un calendario y se guarda ahí
+# mismo. La nota se carga desde la misma fila.
+#
+# Reglas:
+# - Una sola nota por parcial y por recuperatorio: si ya existe, solo se
+#   puede editar o borrar.
+# - Un parcial puede cargarse como "Ausente" (sin nota, no aprobado).
+# - El recuperatorio de un parcial solo se habilita si ese parcial está
+#   desaprobado o con ausencia. Si el parcial está aprobado no corresponde, y
+#   si todavía no hay nada cargado del parcial, queda bloqueado.
+# - Se marca aprobado con nota 6 o más.
+# - El final solo lleva fecha acá; sus notas siguen cargándose en Notas.
+#
+# No abre conexiones nuevas para leer: usa el batch get_cursadas_tab_data.
+
+ETIQUETA_PARCIAL = {1: "1er Parcial", 2: "2do Parcial"}
+CAMPOS_FECHA_EVALUACION = {
+    "parcial1": "fecha_parcial1",
+    "parcial2": "fecha_parcial2",
+    "recup1": "fecha_recuperatorio1",
+    "recup2": "fecha_recuperatorio2",
+    "final": "fecha_final",
+}
+NOTA_APROBACION = 6
+
+
+def _limpiar_cache_notas():
+    # Import dentro de la función: evaluaciones.py importa de este módulo, así
+    # que importarlo arriba generaría un import circular.
+    from pages.evaluaciones import get_evaluaciones
+    get_evaluaciones.clear()
+    get_home_data_completo.clear()
+    get_cursadas_tab_data.clear()
+    get_promedios_por_materia.clear()
+
+
+def guardar_fecha_evaluacion(usuario_id, cursada_id, campo, fecha):
+    columna = CAMPOS_FECHA_EVALUACION[campo]  # el nombre sale solo de este diccionario
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"UPDATE cursadas SET {columna} = %s WHERE id = %s AND usuario_id = %s;",
+                (fecha, cursada_id, usuario_id)
+            )
+        conn.commit()
+    get_todas_cursadas.clear()
+    get_cursadas_tab_data.clear()
+
+
+def guardar_evaluacion_numerada(usuario_id, materia_id, tipo, numero, descripcion, nota, fecha, aprobado):
+    """
+    Alta de un parcial o de un recuperatorio con su número (1 o 2). Devuelve
+    (ok, mensaje). Se hace acá y no con agregar_evaluacion() de
+    evaluaciones.py porque esa función descarta el número de todo lo que no
+    sea un parcial.
+    """
+    nota = round(float(nota), 2) if nota is not None else None
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO evaluaciones (usuario_id, materia_id, tipo, descripcion, nota, fecha, aprobado, numero)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s);
+                """, (usuario_id, materia_id, tipo, descripcion, nota, fecha, aprobado, numero))
+            conn.commit()
+    except psycopg.errors.UniqueViolation:
+        return False, "Ya existe una nota de esa evaluación para esta materia. Editala o borrala."
+    _limpiar_cache_notas()
+    return True, "Guardado."
+
+
+def asignar_numero_recuperatorio(usuario_id, eval_id, numero):
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                UPDATE evaluaciones SET numero = %s
+                WHERE id = %s AND usuario_id = %s AND tipo = 'Recuperatorio';
+            """, (numero, eval_id, usuario_id))
+        conn.commit()
+    _limpiar_cache_notas()
+
+
+def _texto_estado_evaluacion(fecha, ev):
+    """'15/10/2026 · Nota 8.00 ✅', '15/10/2026 · Ausente' o 'Sin fecha · Sin nota cargada aún'."""
+    partes = [fecha.strftime('%d/%m/%Y') if fecha else "Sin fecha"]
+    if ev is None:
+        partes.append("Sin nota cargada aún")
+    elif ev[1] is None:
+        partes.append("Ausente")
+    else:
+        icono = "✅" if ev[2] else "❌"
+        partes.append(f"Nota {float(ev[1]):.2f} {icono}")
+    return " · ".join(partes)
+
+
+def _recuperatorio_habilitado(evals, numero):
+    """(habilitado, motivo_si_no). Ver las reglas arriba."""
+    nombre = ETIQUETA_PARCIAL[numero]
+    if evals.get(("Recuperatorio", numero)) is not None:
+        return True, None
+    parcial = evals.get(("Parcial", numero))
+    if parcial is None:
+        return False, f"se habilita cuando cargues el {nombre} (con nota o como ausente)."
+    if parcial[1] is not None and parcial[2]:
+        return False, f"no corresponde, el {nombre} está aprobado."
+    return True, None
+
+
+def mostrar_evaluaciones_materia(usuario, mid, cid, fechas, evals):
+    hoy = date.today()
+    st.markdown("**📆 Evaluaciones:**")
+
+    filas = [
+        ("1er Parcial", "parcial1", "Parcial", 1),
+        ("Recuperatorio del 1er Parcial", "recup1", "Recuperatorio", 1),
+        ("2do Parcial", "parcial2", "Parcial", 2),
+        ("Recuperatorio del 2do Parcial", "recup2", "Recuperatorio", 2),
+        ("Final", "final", None, None),
+    ]
+
+    # ── Próxima evaluación con fecha cargada y sin nota ───────────────────
+    candidatas = []
+    for etiqueta, campo, tipo, numero in filas:
+        fecha = fechas.get(campo)
+        if not fecha or fecha < hoy:
+            continue
+        if tipo is not None:
+            if evals.get((tipo, numero)) is not None:
+                continue
+            if tipo == "Recuperatorio" and not _recuperatorio_habilitado(evals, numero)[0]:
+                continue
+        candidatas.append((fecha, etiqueta))
+    if candidatas:
+        f_prox, e_prox = min(candidatas)
+        dias = (f_prox - hoy).days
+        if dias == 0:
+            cuando = "hoy"
+        elif dias == 1:
+            cuando = "mañana"
+        else:
+            cuando = f"en {dias} días"
+        st.info(f"⏳ Próxima evaluación: {e_prox}, {f_prox.strftime('%d/%m/%Y')} ({cuando})")
+    else:
+        st.caption("No hay una próxima evaluación con fecha cargada.")
+
+    # ── Una fila por evaluación ────────────────────────────────────────────
+    for etiqueta, campo, tipo, numero in filas:
+        fecha = fechas.get(campo)
+        ev = evals.get((tipo, numero)) if tipo else None
+
+        habilitado, motivo = True, None
+        if tipo == "Recuperatorio":
+            habilitado, motivo = _recuperatorio_habilitado(evals, numero)
+        if not habilitado:
+            st.caption(f"{etiqueta}: {motivo}")
+            continue
+
+        k_fecha = f"ev_fecha_open_{cid}_{campo}"
+        k_nota = f"ev_nota_open_{mid}_{campo}"
+        k_del = f"ev_del_open_{mid}_{campo}"
+
+        col_txt, col_f, col_n, col_d = st.columns([5, 1.3, 1.3, 0.9])
+        with col_txt:
+            if tipo is None:
+                texto_final = fecha.strftime('%d/%m/%Y') if fecha else "Sin fecha"
+                st.markdown(f"{etiqueta}: {texto_final}")
+            else:
+                st.markdown(f"{etiqueta}: {_texto_estado_evaluacion(fecha, ev)}")
+        with col_f:
+            if st.button("📅 Fecha", key=f"ev_btn_fecha_{cid}_{campo}", use_container_width=True):
+                st.session_state[k_fecha] = not st.session_state.get(k_fecha, False)
+                st.rerun()
+        if tipo is not None:
+            with col_n:
+                etiqueta_boton = "✏️ Nota" if ev is not None else "📝 Nota"
+                if st.button(etiqueta_boton, key=f"ev_btn_nota_{mid}_{campo}", use_container_width=True):
+                    st.session_state[k_nota] = not st.session_state.get(k_nota, False)
+                    st.rerun()
+            with col_d:
+                if ev is not None:
+                    if st.button("🗑️", key=f"ev_btn_del_{mid}_{campo}", use_container_width=True):
+                        st.session_state[k_del] = True
+                        st.rerun()
+
+        # ── Calendario para la fecha ──────────────────────────────────────
+        if st.session_state.get(k_fecha):
+            with st.form(f"form_ev_fecha_{cid}_{campo}"):
+                nueva_fecha = st.date_input(
+                    f"Fecha: {etiqueta}", value=fecha,
+                    key=f"ev_fecha_val_{cid}_{campo}", format="DD/MM/YYYY"
+                )
+                c_g, c_q, c_x = st.columns(3)
+                with c_g:
+                    guardar_f = st.form_submit_button("💾 Guardar", use_container_width=True)
+                with c_q:
+                    quitar_f = st.form_submit_button("🧹 Quitar fecha", use_container_width=True)
+                with c_x:
+                    cancelar_f = st.form_submit_button("❌ Cancelar", use_container_width=True)
+            if guardar_f:
+                if nueva_fecha is None:
+                    st.error("Elegí una fecha, o usá Quitar fecha.")
+                else:
+                    guardar_fecha_evaluacion(usuario["id"], cid, campo, nueva_fecha)
+                    st.session_state[k_fecha] = False
+                    st.rerun()
+            if quitar_f:
+                guardar_fecha_evaluacion(usuario["id"], cid, campo, None)
+                st.session_state[k_fecha] = False
+                st.rerun()
+            if cancelar_f:
+                st.session_state[k_fecha] = False
+                st.rerun()
+
+        # ── Carga o edición de la nota ────────────────────────────────────
+        if tipo is not None and st.session_state.get(k_nota):
+            nota_previa = float(ev[1]) if (ev is not None and ev[1] is not None) else 0.0
+            with st.form(f"form_ev_nota_{mid}_{campo}"):
+                st.markdown(f"**{'Editar' if ev is not None else 'Cargar'} nota: {etiqueta}**")
+                ausente = False
+                if tipo == "Parcial":
+                    ausente = st.checkbox(
+                        "Estuve ausente (se guarda sin nota)",
+                        value=(ev is not None and ev[1] is None),
+                        key=f"ev_ausente_{mid}_{campo}"
+                    )
+                nota_val = st.number_input(
+                    "Nota", min_value=0.0, max_value=10.0, step=0.01, format="%.2f",
+                    value=nota_previa, key=f"ev_nota_val_{mid}_{campo}"
+                )
+                st.caption(f"Se marca como aprobado con {NOTA_APROBACION} o más.")
+                c_gn, c_cn = st.columns(2)
+                with c_gn:
+                    guardar_n = st.form_submit_button("💾 Guardar", use_container_width=True)
+                with c_cn:
+                    cancelar_n = st.form_submit_button("❌ Cancelar", use_container_width=True)
+            if guardar_n:
+                if ausente:
+                    nota_final, aprobado, desc = None, False, "Ausente"
+                else:
+                    nota_final = float(nota_val)
+                    aprobado = nota_final >= NOTA_APROBACION
+                    desc_base = None if tipo == "Parcial" else etiqueta
+                    desc_previa = ev[4] if ev is not None else None
+                    desc = desc_base if desc_previa in (None, "", "Ausente") else desc_previa
+                if ev is not None:
+                    from pages.evaluaciones import actualizar_evaluacion
+                    ok_n, msg_n = actualizar_evaluacion(
+                        ev[0], desc, nota_final, ev[3] or fecha or hoy, aprobado
+                    )
+                else:
+                    ok_n, msg_n = guardar_evaluacion_numerada(
+                        usuario["id"], mid, tipo, numero, desc, nota_final, fecha or hoy, aprobado
+                    )
+                if ok_n:
+                    st.session_state[k_nota] = False
+                    st.rerun()
+                else:
+                    st.warning(f"⚠️ {msg_n}")
+            if cancelar_n:
+                st.session_state[k_nota] = False
+                st.rerun()
+
+        # ── Confirmación para borrar la nota ──────────────────────────────
+        if ev is not None and st.session_state.get(k_del):
+            st.warning(f"¿Borrar la nota de {etiqueta}?")
+            c_si, c_no = st.columns(2)
+            with c_si:
+                if st.button("✅ Confirmar", key=f"ev_si_del_{mid}_{campo}", use_container_width=True):
+                    from pages.evaluaciones import eliminar_evaluacion
+                    eliminar_evaluacion(ev[0])
+                    st.session_state[k_del] = False
+                    st.rerun()
+            with c_no:
+                if st.button("❌ Cancelar", key=f"ev_no_del_{mid}_{campo}", use_container_width=True):
+                    st.session_state[k_del] = False
+                    st.rerun()
+
+    # ── Notas que ya estaban cargadas pero sin número ─────────────────────
+    parciales_sin_numero = evals.get("parcial_sin_numero", 0)
+    if parciales_sin_numero:
+        st.caption(
+            f"ℹ️ Tenés {parciales_sin_numero} parcial(es) sin número. Usá Notas → ✏️ Editar "
+            "para indicar si es el 1er o el 2do."
+        )
+
+    rec_sin_numero = evals.get("rec_sin_numero", [])
+    if rec_sin_numero:
+        with st.expander(f"ℹ️ {len(rec_sin_numero)} recuperatorio(s) sin indicar a qué parcial corresponde"):
+            opciones_rec = {}
+            for i, (r_id, r_nota, r_fecha) in enumerate(rec_sin_numero, start=1):
+                texto_nota = f"Nota {float(r_nota):.2f}" if r_nota is not None else "Sin nota"
+                texto_fecha = f" · {r_fecha.strftime('%d/%m/%Y')}" if r_fecha else ""
+                opciones_rec[f"{i}) {texto_nota}{texto_fecha}"] = r_id
+            with st.form(f"form_asignar_rec_{mid}"):
+                rec_sel = st.selectbox("Recuperatorio", list(opciones_rec.keys()), key=f"asig_rec_sel_{mid}")
+                num_sel = st.selectbox(
+                    "Corresponde al", [1, 2], format_func=lambda n: ETIQUETA_PARCIAL[n],
+                    key=f"asig_rec_num_{mid}"
+                )
+                asignar = st.form_submit_button("💾 Asignar", use_container_width=True)
+            if asignar:
+                if evals.get(("Recuperatorio", num_sel)) is not None:
+                    st.warning(
+                        f"⚠️ Ya hay un recuperatorio cargado para el {ETIQUETA_PARCIAL[num_sel]}. "
+                        "Borralo o editalo antes de asignar otro."
+                    )
+                else:
+                    asignar_numero_recuperatorio(usuario["id"], opciones_rec[rec_sel], num_sel)
+                    st.rerun()
+
+
 def mostrar(usuario):
     if not usuario:
         st.switch_page("app.py")
@@ -1051,7 +1383,7 @@ def mostrar(usuario):
         # materias curse el alumno.
         (materias_cursando, todas_cursadas, todos_programas, feriados_rows,
          nombre_alumno_tab1, faltas_por_materia, historial_por_cursada,
-         notas_parcial_por_materia) = get_cursadas_tab_data(
+         evals_por_materia) = get_cursadas_tab_data(
             usuario["id"], usuario["carrera_id"]
         )
         feriados_set_tab1 = {f[1] for f in feriados_rows}
@@ -1086,7 +1418,8 @@ def mostrar(usuario):
                     if cursada:
                         (cid, anio, cuatri, modalidad, dias, horario, link, prof1, email_prof1, prof2,
                          email_prof2, turno, fecha_parcial1, fecha_parcial2, fecha_final,
-                         numero_comision, fecha_desde_comision) = cursada
+                         numero_comision, fecha_desde_comision,
+                         fecha_rec1, fecha_rec2) = cursada
 
                         historial_cursada_mid = historial_por_cursada.get(cid, [])
                         faltas_mid = faltas_por_materia.get(mid, [])
@@ -1133,18 +1466,18 @@ def mostrar(usuario):
                                     use_container_width=True
                                 )
 
-                        # ── Evaluaciones: fecha + nota de cada parcial ────
-                        # (04/10/2026) La fecha sale de la cursada; la nota, de la
-                        # tabla evaluaciones (ya viene en el batch de arriba).
-                        notas_parc = notas_parcial_por_materia.get(mid, {})
-                        st.markdown("**📆 Evaluaciones:**")
-                        col_fp1, col_fp2, col_ff = st.columns(3)
-                        with col_fp1:
-                            st.caption(_linea_evaluacion("1er Parcial", fecha_parcial1, notas_parc.get(1)))
-                        with col_fp2:
-                            st.caption(_linea_evaluacion("2do Parcial", fecha_parcial2, notas_parc.get(2)))
-                        with col_ff:
-                            st.caption(f"Final: {fecha_final.strftime('%d/%m/%Y') if fecha_final else '—'}")
+                        # ── Evaluaciones: fechas y notas desde acá (20/10/2026) ──
+                        # Fecha de cada evaluación (calendario) y nota, sin pasar
+                        # por Editar. Ver mostrar_evaluaciones_materia().
+                        mostrar_evaluaciones_materia(
+                            usuario, mid, cid,
+                            {
+                                "parcial1": fecha_parcial1, "parcial2": fecha_parcial2,
+                                "recup1": fecha_rec1, "recup2": fecha_rec2,
+                                "final": fecha_final,
+                            },
+                            evals_por_materia.get(mid, {})
+                        )
 
                         if programa_link:
                             st.markdown("---")
@@ -1263,7 +1596,8 @@ def mostrar(usuario):
                                         ", ".join(e_dias), e_horario_norm, e_link, e_prof1, e_email_prof1,
                                         e_prof2, e_email_prof2,
                                         e_fecha_parcial1, e_fecha_parcial2, e_fecha_final,
-                                        numero_comision=numero_comision
+                                        numero_comision=numero_comision,
+                                        fecha_recuperatorio1=fecha_rec1, fecha_recuperatorio2=fecha_rec2
                                     )
                                     st.session_state[f"editando_cursada_{mid}"] = False
                                     st.success("Cursada actualizada.")
